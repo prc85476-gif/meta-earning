@@ -2,21 +2,24 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install dependencies for building
+# Install dependencies for native modules
 RUN apk add --no-cache python3 make g++
 
-# Copy package manifests first for caching
+# Copy package manifests first for layer caching
 COPY package*.json ./
 COPY client/package*.json ./client/
 
 # Install root dependencies
 RUN npm install --omit=dev
 
-# Install client dependencies & build client
-RUN cd client && npm install && npm run build
+# Install client dependencies
+RUN cd client && npm install
 
-# Copy remaining source code
+# Copy all source files (including client/index.html, src, server, etc.)
 COPY . .
+
+# Build client
+RUN cd client && npm run build
 
 # Expose server port
 EXPOSE 3000
