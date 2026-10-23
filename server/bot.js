@@ -1,0 +1,321 @@
+const TelegramBot = require('node-telegram-bot-api');
+const {
+  getOrCreateUser,
+  getUserFullDetails,
+  getBotGlobalStats,
+  pool
+} = require('./db');
+
+let mainUserBotInstance = null;
+
+function sendNotificationToUser(telegramId, text, options = {}) {
+  if (mainUserBotInstance && telegramId) {
+    return mainUserBotInstance.sendMessage(telegramId, text, { parse_mode: 'Markdown', ...options })
+      .catch(err => console.error(`Error sending message to user ${telegramId}:`, err.message));
+  }
+}
+
+function initTelegramBot(webappUrl) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+
+  if (!token || token === 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
+    console.log('----------------------------------------------------');
+    console.log('ℹ️  TELEGRAM_BOT_TOKEN is not configured.');
+    console.log('   The WebApp is available in your browser at: ' + webappUrl);
+    console.log('   To connect with Telegram, add your Bot Token in .env');
+    console.log('----------------------------------------------------');
+    return null;
+  }
+
+  try {
+    const bot = new TelegramBot(token, { polling: true });
+    mainUserBotInstance = bot;
+    console.log('🚀 Telegram Bot is running in polling mode with Neon DB integration...');
+
+    let botUsername = 'Meta_Farming_bot';
+    bot.getMe().then(me => {
+      if (me && me.username) {
+        botUsername = me.username;
+        console.log(`🤖 Bot @${botUsername} connected successfully.`);
+      }
+    }).catch(err => console.log('Notice fetching bot info:', err.message));
+
+    // Set Menu Button to open Mini App directly
+    bot.setChatMenuButton({
+      menu_button: {
+        type: 'web_app',
+        text: '🚀 Open Meta Farm',
+        web_app: { url: webappUrl }
+      }
+    }).catch(err => console.log('Notice: Could not set default menu button:', err.message));
+
+    // Supported Languages (Excluding Bengali as requested: "bangla bade all sob thakbe flag soho")
+    const BOT_LANGUAGES = [
+      { code: 'en', label: '🇬🇧 English', name: 'English' },
+      { code: 'ru', label: '🇷🇺 Русский', name: 'Russian' },
+      { code: 'id', label: '🇮🇩 Bahasa Indonesia', name: 'Indonesian' },
+      { code: 'ng', label: '🇳🇬 English (NG)', name: 'Nigerian' },
+      { code: 'hi', label: '🇮🇳 हिन्दी', name: 'Hindi' },
+      { code: 'vi', label: '🇻🇳 Tiếng Việt', name: 'Vietnamese' },
+      { code: 'fil', label: '🇵🇭 Tagalog', name: 'Filipino' },
+      { code: 'tr', label: '🇹🇷 Türkçe', name: 'Turkish' },
+      { code: 'es', label: '🇪🇸 Español', name: 'Spanish' }
+    ];
+
+    // Welcome messages by language
+    const WELCOME_MESSAGES = {
+      en: `⚡ *Welcome to Meta Farm!* ⚡\n\nStart automated cloud mining USDT on Binance Smart Chain and receive daily rewards directly to your account.`,
+      ru: `⚡ *Добро пожаловать в Meta Farm!* ⚡\n\nНачните облачный майнинг USDT и получайте ежедневные награды прямо на свой счет.`,
+      id: `⚡ *Selamat Datang di Meta Farm!* ⚡\n\nMulailah cloud mining USDT dan dapatkan penghasilan harian otomatis ke akun Anda.`,
+      ng: `⚡ *Welcome to Meta Farm!* ⚡\n\nStart your USDT cloud mining sharp sharp and collect your daily rewards directly!`,
+      hi: `⚡ *Meta Farm में आपका स्वागत है!* ⚡\n\nUSDT क्लाउड माइनिंग शुरू करें और प्रतिदिन सीधे अपने खाते में कमाई प्राप्त करें।`,
+      vi: `⚡ *Chào mừng bạn đến với Meta Farm!* ⚡\n\nBắt đầu khai thác đám mây USDT và nhận phần thưởng hàng ngày vào tài khoản của bạn.`,
+      fil: `⚡ *Maligayang pagdating sa Meta Farm!* ⚡\n\nSimulan ang pagmimina ng USDT at kumita ng pang-araw-araw na pabuya diretso sa iyong account.`,
+      tr: `⚡ *Meta Farm'a Hoş Geldiniz!* ⚡\n\nUSDT bulut madenciliğine başlayın ve günlük kazançlarınızı doğrudan hesabınıza alın.`,
+      es: `⚡ *¡Bienvenido a Meta Farm!* ⚡\n\nComience la minería en la nube de USDT y obtenga recompensas diarias directamente en su cuenta.`
+    };
+
+    // Helper: Build the 3 Action Buttons requested
+    const getWelcomeActionKeyboard = () => ({
+      inline_keyboard: [
+        [
+          {
+            text: '🚀 Open Meta Farm',
+            web_app: { url: webappUrl }
+          }
+        ],
+        [
+          {
+            text: '📢 Join News Channel',
+            url: 'https://t.me/metafarmingnews'
+          }
+        ],
+        [
+          {
+            text: '💳 Payout Channel',
+            url: 'https://t.me/Meta_Farming_Payment_Proof'
+          }
+        ]
+      ]
+    });
+
+    // /start command: Record User & Referral, then ask to Select Language
+    bot.onText(/\/start(.*)/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      const tgUser = msg.from || {};
+      const refCode = match[1] ? match[1].trim() : '';
+
+      try {
+        // Save or update user in Neon PostgreSQL Database and track referral
+        await getOrCreateUser({
+          id: tgUser.id || chatId,
+          first_name: tgUser.first_name || 'Miner',
+          last_name: tgUser.last_name || '',
+          username: tgUser.username || '',
+          refCode
+        });
+
+        // Language selection keyboard (2 per row)
+        const languageButtons = [];
+        for (let i = 0; i < BOT_LANGUAGES.length; i += 2) {
+          const row = [
+            { text: BOT_LANGUAGES[i].label, callback_data: `lang_${BOT_LANGUAGES[i].code}` }
+          ];
+          if (BOT_LANGUAGES[i + 1]) {
+            row.push({ text: BOT_LANGUAGES[i + 1].label, callback_data: `lang_${BOT_LANGUAGES[i + 1].code}` });
+          }
+          languageButtons.push(row);
+        }
+
+        const langPrompt = `🌐 *Please select your language:*`;
+
+        await bot.sendMessage(chatId, langPrompt, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: languageButtons
+          }
+        });
+      } catch (error) {
+        console.error('Bot /start error:', error);
+        bot.sendMessage(chatId, `🌐 *Please select your language:*`, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🇬🇧 English', callback_data: 'lang_en' }]
+            ]
+          }
+        });
+      }
+    });
+
+    // Handle Inline Callbacks
+    bot.on('callback_query', async (query) => {
+      const chatId = query.message.chat.id;
+      const userId = query.from.id;
+      const data = query.data || '';
+
+      bot.answerCallbackQuery(query.id).catch(() => {});
+
+      // 1. When user selects a language: Send Welcome SMS + 3 Buttons ONLY
+      if (data.startsWith('lang_')) {
+        const langCode = data.replace('lang_', '');
+        const welcomeText = WELCOME_MESSAGES[langCode] || WELCOME_MESSAGES.en;
+
+        try {
+          // Delete or edit language selection message, then show Welcome message
+          await bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
+        } catch {}
+
+        await bot.sendMessage(chatId, welcomeText, {
+          parse_mode: 'Markdown',
+          reply_markup: getWelcomeActionKeyboard()
+        });
+        return;
+      }
+
+      // Existing callbacks if triggered
+      if (data === 'my_account') {
+        return sendUserAccountInfo(chatId, userId);
+      } else if (data === 'my_history') {
+        return sendUserHistory(chatId, userId);
+      } else if (data === 'bot_stats') {
+        return sendGlobalStats(chatId);
+      }
+    });
+
+    // Helper: Show User Account Details (if typed directly via /account or /profile)
+    async function sendUserAccountInfo(chatId, userId) {
+      try {
+        const user = await getUserFullDetails(userId);
+        if (!user) {
+          return bot.sendMessage(chatId, 'User not found. Please type /start.');
+        }
+
+        const addressInfo = user.withdraw_address 
+          ? `\`${user.withdraw_address}\` (🔒 Locked)`
+          : 'Not set yet (Locks permanently on first withdrawal)';
+
+        const refLink = `https://t.me/${botUsername}?start=${user.telegram_id}`;
+
+        const text = 
+`👤 *Account Details:*\n\n` +
+`• *Name:* ${user.first_name || ''} ${user.last_name || ''} (@${user.username || 'N/A'})\n` +
+`• *Telegram ID:* \`${user.telegram_id}\`\n\n` +
+`💰 *Balances:*\n` +
+`• *Withdrawable Balance (Main):* \`${Number(user.wallet_balance).toFixed(4)} USDT\`\n` +
+`• *Deposit Balance:* \`${Number(user.deposit_balance).toFixed(2)} USDT\`\n` +
+`• *Total Deposited:* \`${Number(user.total_deposit).toFixed(2)} USDT\`\n` +
+`• *Total Withdrawn:* \`${Number(user.total_withdraw).toFixed(2)} USDT\`\n\n` +
+`⛏️ *Mining:*\n` +
+`• *Daily Mining Rate:* \`${Number(user.daily_mining_rate).toFixed(4)} USDT/day\`\n` +
+`• *Hashrate:* \`${Number(user.hashrate).toFixed(2)} GH/s\`\n\n` +
+`🔒 *Withdraw Address (BEP20):*\n` +
+`• ${addressInfo}\n\n` +
+`👥 *Referral:* \`${user.total_referrals || 0} users\`\n` +
+`• *Referral Bonus (10%):* \`${Number(user.total_referral_bonus).toFixed(2)} USDT\`\n` +
+`• *Your Link:*\n\`${refLink}\``;
+
+        await bot.sendMessage(chatId, text, {
+          parse_mode: 'Markdown',
+          reply_markup: getWelcomeActionKeyboard()
+        });
+      } catch (err) {
+        console.error('Error in sendUserAccountInfo:', err);
+      }
+    }
+
+    // Helper: Show User Transaction History
+    async function sendUserHistory(chatId, userId) {
+      try {
+        const user = await getUserFullDetails(userId);
+        if (!user || !user.transactions || user.transactions.length === 0) {
+          return bot.sendMessage(chatId, 'No transaction history found yet.', {
+            reply_markup: getWelcomeActionKeyboard()
+          });
+        }
+
+        let text = `📜 *Transaction History:*\n\n`;
+
+        user.transactions.slice(0, 8).forEach((tx, idx) => {
+          const typeIcon = tx.type === 'deposit' ? '📥 Deposit' :
+                           tx.type === 'withdraw' ? '📤 Withdraw' :
+                           tx.type === 'plan_purchase' ? '📦 Plan Purchase' :
+                           tx.type === 'claim' ? '⚡ Mining Claim' : '🎁 Referral Bonus';
+          
+          const statusIcon = tx.status === 'Pending' ? '⏳ Pending' : '✅ Completed';
+          const amtStr = `${Number(tx.amount).toFixed(2)} USDT`;
+          const time = new Date(tx.created_at).toLocaleString('en-US', { hour12: true, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+          text += `*${idx + 1}. ${typeIcon}* — \`${amtStr}\`\n`;
+          text += `   • Status: ${statusIcon}\n`;
+          if (tx.tx_hash) {
+            text += `   • TxID: \`${tx.tx_hash.substring(0, 10)}...${tx.tx_hash.substring(tx.tx_hash.length - 6)}\`\n`;
+          }
+          text += `   • Date: ${time}\n\n`;
+        });
+
+        await bot.sendMessage(chatId, text, {
+          parse_mode: 'Markdown',
+          reply_markup: getWelcomeActionKeyboard()
+        });
+      } catch (err) {
+        console.error('Error in sendUserHistory:', err);
+      }
+    }
+
+    // Helper: Show Global Bot Stats
+    async function sendGlobalStats(chatId) {
+      try {
+        const stats = await getBotGlobalStats();
+
+        const text = 
+`🌐 *Bot Global Live Statistics (Neon PostgreSQL):*\n\n` +
+`• 👥 *Total Users:* \`${stats.total_users || 0}\`\n` +
+`• 💰 *Total User Balance:* \`${Number(stats.total_user_wallet_balance || 0).toFixed(2)} USDT\`\n` +
+`• 📥 *Total Deposit Balance:* \`${Number(stats.total_user_deposit_balance || 0).toFixed(2)} USDT\`\n` +
+`• 💳 *Total Bot Deposit:* \`${Number(stats.total_bot_deposit || 0).toFixed(2)} USDT\`\n` +
+`• 💸 *Total Bot Withdraw:* \`${Number(stats.total_bot_withdraw || 0).toFixed(2)} USDT\`\n` +
+`• ⏳ *Pending Withdrawals:* \`${stats.pending_withdrawals_count || 0}\`\n` +
+`• 🎁 *Total 10% Referral Commissions Paid:* \`${Number(stats.total_referral_commissions || 0).toFixed(2)} USDT\``;
+
+        await bot.sendMessage(chatId, text, {
+          parse_mode: 'Markdown',
+          reply_markup: getWelcomeActionKeyboard()
+        });
+      } catch (err) {
+        console.error('Error in sendGlobalStats:', err);
+      }
+    }
+
+    // Direct text commands
+    bot.on('message', async (msg) => {
+      const text = msg.text || '';
+      const chatId = msg.chat.id;
+      const userId = msg.from ? msg.from.id : chatId;
+
+      if (text.startsWith('/start')) {
+        // Handled by onText(/\/start(.*)/)
+        return;
+      }
+
+      if (text === '/account' || text === '/profile' || text === '/balance') {
+        return sendUserAccountInfo(chatId, userId);
+      }
+
+      if (text === '/history') {
+        return sendUserHistory(chatId, userId);
+      }
+
+      if (text === '/stats' || text === '/admin' || text === '/global') {
+        return sendGlobalStats(chatId);
+      }
+    });
+
+    return bot;
+  } catch (error) {
+    console.error('Failed to start Telegram Bot:', error.message);
+    return null;
+  }
+}
+
+module.exports = { initTelegramBot, sendNotificationToUser };

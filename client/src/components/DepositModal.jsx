@@ -1,0 +1,495 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  X, 
+  Copy, 
+  Check, 
+  QrCode, 
+  ShieldCheck, 
+  AlertTriangle, 
+  Loader2, 
+  CheckCircle2, 
+  ArrowLeft, 
+  Clipboard, 
+  Receipt,
+  Sparkles
+} from 'lucide-react';
+import confetti from 'canvas-confetti';
+import { copyToClipboard } from '../utils/formatters';
+import { triggerHaptic } from '../utils/telegram';
+import usdtBep20Logo from '../assets/usdt-bep20-logo.jpg';
+
+const BEP20_ADDRESS = '0xf8e3Ea58EDB3719D934E1C2Bef4d160C1772FA81';
+
+export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang }) => {
+  const dialogRef = useRef(null);
+  const [copied, setCopied] = useState(false);
+  
+  // Modal step: 'address' | 'receipt' | 'credited'
+  const [step, setStep] = useState('address');
+  const [isVerifyingNext, setIsVerifyingNext] = useState(false);
+  const [txId, setTxId] = useState('');
+  const [amount, setAmount] = useState('3');
+  const [txError, setTxError] = useState('');
+  const [isSubmittingTx, setIsSubmittingTx] = useState(false);
+
+  // Reset state when modal opens or closes
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen) {
+      setStep('address');
+      setIsVerifyingNext(false);
+      setTxId('');
+      setAmount('3');
+      setTxError('');
+      setIsSubmittingTx(false);
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+    } else {
+      if (dialog.open) {
+        dialog.close();
+      }
+    }
+  }, [isOpen]);
+
+  const handleBackdropClick = (e) => {
+    const dialog = dialogRef.current;
+    if (dialog && e.target === dialog) {
+      handleClose();
+    }
+  };
+
+  const handleClose = () => {
+    triggerHaptic('light');
+    onClose();
+  };
+
+  const handleCopy = async () => {
+    triggerHaptic('success');
+    const ok = await copyToClipboard(BEP20_ADDRESS);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
+    }
+  };
+
+  // Button loader on click, then move to receipt TxID paste screen
+  const handleNextToReceipt = () => {
+    if (isVerifyingNext) return;
+    triggerHaptic('medium');
+    setIsVerifyingNext(true);
+
+    setTimeout(() => {
+      setIsVerifyingNext(false);
+      setStep('receipt');
+      triggerHaptic('success');
+    }, 1200);
+  };
+
+  // Paste transaction ID from clipboard
+  const handlePasteTxId = async () => {
+    try {
+      triggerHaptic('light');
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          setTxId(text.trim());
+          setTxError('');
+          return;
+        }
+      }
+      const promptVal = window.prompt(
+        lang === 'bn' 
+          ? 'এখানে আপনার Transaction ID (TxHash) পেস্ট করুন:' 
+          : 'Paste your Transaction ID (TxHash) here:'
+      );
+      if (promptVal && promptVal.trim()) {
+        setTxId(promptVal.trim());
+        setTxError('');
+      }
+    } catch (err) {
+      const promptVal = window.prompt(
+        lang === 'bn' 
+          ? 'এখানে আপনার Transaction ID (TxHash) পেস্ট করুন:' 
+          : 'Paste your Transaction ID (TxHash) here:'
+      );
+      if (promptVal && promptVal.trim()) {
+        setTxId(promptVal.trim());
+        setTxError('');
+      }
+    }
+  };
+
+  // Submit TxID and credit deposit via BSC backend on-chain verification
+  const handleSubmitReceipt = async () => {
+    const rawTx = txId ? txId.trim() : '';
+    if (!rawTx || rawTx.length < 10) {
+      triggerHaptic('warning');
+      setTxError(
+        lang === 'bn'
+          ? 'plz again deposit tangection id error: অনুগ্রহ করে সঠিক Transaction ID / Hash দিন।'
+          : 'plz again deposit tangection id error: Please enter a valid Transaction Hash / TxID.'
+      );
+      return;
+    }
+
+    const formattedTx = rawTx.startsWith('0x') ? rawTx : `0x${rawTx}`;
+
+    // Valid BSC transaction hashes are 66 characters: 0x followed by 64 hexadecimal characters
+    if (!/^0x[a-fA-F0-9]{64}$/.test(formattedTx)) {
+      triggerHaptic('warning');
+      setTxError(
+        lang === 'bn'
+          ? 'plz again deposit tangection id error: অবৈধ TxHash ফরম্যাট (অবশ্যই 66 সংখ্যার Hex কোড হতে হবে)।'
+          : 'plz again deposit tangection id error: Invalid TxHash format (must be 66 hex characters starting with 0x).'
+      );
+      return;
+    }
+
+    setTxError('');
+    setIsSubmittingTx(true);
+    triggerHaptic('medium');
+
+    try {
+      const response = await fetch('/api/deposit/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          txHash: formattedTx,
+          userId: 'telegram_user'
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setIsSubmittingTx(false);
+        triggerHaptic('warning');
+        const errDetail = data.message || 'Verification failed';
+        setTxError(
+          lang === 'bn'
+            ? `plz again deposit tangection id error (${errDetail})`
+            : `plz again deposit tangection id error (${errDetail})`
+        );
+        return;
+      }
+
+      // Successful verified deposit from BSC on-chain ledger
+      const verifiedAmount = data.amount || parseFloat(amount) || 3;
+      setAmount(verifiedAmount.toString());
+      setIsSubmittingTx(false);
+      setStep('credited');
+      triggerHaptic('success');
+
+      try {
+        confetti({
+          particleCount: 65,
+          spread: 80,
+          origin: { y: 0.4 }
+        });
+      } catch (e) {}
+
+      if (onSimulateDeposit) {
+        onSimulateDeposit(verifiedAmount, formattedTx);
+      }
+    } catch (err) {
+      setIsSubmittingTx(false);
+      triggerHaptic('warning');
+      setTxError(
+        lang === 'bn'
+          ? 'plz again deposit tangection id error (সার্ভার বা নেটওয়ার্ক সংযোগ সমস্যা)'
+          : 'plz again deposit tangection id error (Network or server connection failed)'
+      );
+    }
+  };
+
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(BEP20_ADDRESS)}&color=0f172a&bgcolor=ffffff`;
+
+  return (
+    <dialog
+      ref={dialogRef}
+      onClick={handleBackdropClick}
+      onCancel={handleClose}
+      aria-labelledby="deposit-modal-title"
+    >
+      <div className="modal-inner deposit-modal-clean">
+        <div className="modal-drag-indicator" />
+
+        {/* Modal Header */}
+        <div className="modal-header-row">
+          <div className="modal-title" id="deposit-modal-title">
+            {step === 'receipt' && (
+              <button 
+                type="button" 
+                className="btn-modal-back"
+                onClick={() => setStep('address')}
+                title="Back to QR Code"
+              >
+                <ArrowLeft size={16} />
+              </button>
+            )}
+            <QrCode size={20} color="#00b074" />
+            <span>
+              {step === 'receipt' 
+                ? (lang === 'bn' ? 'ডিপোজিট রিসিপ্ট' : 'Deposit Receipt')
+                : (lang === 'bn' ? 'ইউএসডিটি ডিপোজিট' : 'Deposit USDT')}
+            </span>
+            <span className="network-pill-badge">BEP20</span>
+          </div>
+          <button
+            type="button"
+            className="modal-close-btn"
+            onClick={handleClose}
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* ---------------- STEP 1: ADDRESS & QR CODE ---------------- */}
+        {step === 'address' && (
+          <>
+            {/* Network Info Banner */}
+            <div className="deposit-network-banner">
+              <img
+                src={usdtBep20Logo}
+                alt="USDT BEP20 Logo"
+                className="network-logo-img"
+              />
+              <div className="network-banner-text">
+                <span className="network-name">USDT (BEP20)</span>
+                <span className="network-chain">BNB Smart Chain (BSC Network)</span>
+              </div>
+            </div>
+
+            {/* QR Code Container */}
+            <div className="qr-wrapper-clean">
+              <div className="qr-frame">
+                <img
+                  src={qrUrl}
+                  alt="USDT BEP20 QR Code"
+                  className="qr-image-clean"
+                  loading="lazy"
+                />
+              </div>
+              <span className="qr-scan-hint">
+                {lang === 'bn' ? 'ক্যামেরা অথবা ওয়ালেট দিয়ে স্ক্যান করুন' : 'Scan QR code with your crypto wallet'}
+              </span>
+            </div>
+
+            {/* Address Box */}
+            <div className="deposit-address-container">
+              <label className="deposit-address-label">
+                {lang === 'bn' ? 'ডিপোজিট এড্রেস (BEP20)' : 'Your USDT BEP20 Deposit Address'}
+              </label>
+              <div className="deposit-address-box">
+                <span className="address-text">{BEP20_ADDRESS}</span>
+                <button
+                  type="button"
+                  className={`btn-copy ${copied ? 'copied' : ''}`}
+                  onClick={handleCopy}
+                >
+                  {copied ? (
+                    <>
+                      <Check size={14} color="#00b074" strokeWidth={2.6} />
+                      <span>{lang === 'bn' ? 'কপি হয়েছে' : 'Copied'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={14} />
+                      <span>{lang === 'bn' ? 'কপি' : 'Copy'}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Important Minimum Deposit Notice */}
+            <div className="deposit-important-alert">
+              <div className="alert-icon-wrap">
+                <AlertTriangle size={18} color="#d97706" />
+              </div>
+              <div className="alert-text-wrap">
+                <span className="alert-title">
+                  {lang === 'bn' ? 'জরুরি সতর্কতা (Important):' : 'Important Notice:'}
+                </span>
+                <p className="alert-desc">
+                  {lang === 'bn'
+                    ? 'নূন্যতম ডিপোজিট ৩$ USDT (BEP20)। ৩$ এর কম পাঠালে তা অ্যাকাউন্টে যোগ হবে না।'
+                    : 'Minimum deposit is $3 USDT (BEP20). Deposits below $3 cannot be credited or refunded.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Next / Verify Deposit Button with in-button loader */}
+            <button
+              type="button"
+              className={`btn-verify-deposit ${isVerifyingNext ? 'loading' : ''}`}
+              onClick={handleNextToReceipt}
+              disabled={isVerifyingNext}
+            >
+              {isVerifyingNext ? (
+                <>
+                  <Loader2 size={18} className="spin-loader" />
+                  <span>{lang === 'bn' ? 'যাচাই করা হচ্ছে...' : 'Verifying...'}</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck size={18} />
+                  <span>{lang === 'bn' ? 'নেক্সট (ভেরিফাই ডিপোজিট)' : 'Next (Verify Deposit)'}</span>
+                </>
+              )}
+            </button>
+          </>
+        )}
+
+        {/* ---------------- STEP 2: RECEIPT & TRANSACTION ID INPUT ---------------- */}
+        {step === 'receipt' && (
+          <div className="deposit-receipt-view">
+            {/* Receipt Summary Card */}
+            <div className="receipt-status-card">
+              <div className="receipt-badge-row">
+                <span className="receipt-title-lbl">
+                  <Receipt size={14} color="#00b074" />
+                  {lang === 'bn' ? 'পেমেন্ট রিসিপ্ট ভেরিফিকেশন' : 'Payment Receipt Verification'}
+                </span>
+                <span className="receipt-status-pill">
+                  {lang === 'bn' ? 'পেন্ডিং ভেরিফিকেশন' : 'Pending Verification'}
+                </span>
+              </div>
+              <p className="receipt-helper-text">
+                {lang === 'bn' 
+                  ? 'আপনার বাইন্যান্স বা ট্রাস্ট ওয়ালেট থেকে ট্রান্সফারের Transaction ID (TxHash) নিচে পেস্ট করুন।' 
+                  : 'Paste your Transaction ID (TxHash) from your wallet/exchange to verify and credit your balance.'}
+              </p>
+            </div>
+
+            {/* Transaction ID Input Form */}
+            <div className="receipt-form-group">
+              <label htmlFor="txid-input" className="receipt-input-lbl">
+                {lang === 'bn' ? 'ট্রানজেকশন আইডি (Transaction ID / TxHash) *' : 'Transaction ID / Hash (TxHash) *'}
+              </label>
+              <div className="receipt-input-wrapper">
+                <input
+                  id="txid-input"
+                  type="text"
+                  value={txId}
+                  onChange={(e) => {
+                    setTxId(e.target.value);
+                    if (txError) setTxError('');
+                  }}
+                  placeholder="0x7f9a8b... or paste TxID"
+                  className="receipt-tx-input"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="btn-paste-tx"
+                  onClick={handlePasteTxId}
+                >
+                  <Clipboard size={13} />
+                  <span>{lang === 'bn' ? 'পেস্ট' : 'Paste'}</span>
+                </button>
+              </div>
+              {txError && (
+                <span className="receipt-error-text">{txError}</span>
+              )}
+            </div>
+
+            {/* Deposit Amount Field */}
+            <div className="receipt-form-group">
+              <div className="receipt-amt-header">
+                <label htmlFor="tx-amount-input" className="receipt-input-lbl">
+                  {lang === 'bn' ? 'ডিপোজিট পরিমাণ (USDT)' : 'Deposited Amount (USDT)'}
+                </label>
+                <span className="receipt-min-tag">
+                  {lang === 'bn' ? 'নূন্যতম ৩$ USDT' : 'Min $3.00 USDT'}
+                </span>
+              </div>
+              <div className="receipt-amt-wrapper">
+                <span className="receipt-currency-prefix">$</span>
+                <input
+                  id="tx-amount-input"
+                  type="number"
+                  min="3"
+                  step="any"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="3.00"
+                  className="receipt-amt-input"
+                />
+                <span className="receipt-currency-badge">USDT</span>
+              </div>
+            </div>
+
+            {/* Submit Receipt Button */}
+            <button
+              type="button"
+              className={`btn-verify-deposit ${isSubmittingTx ? 'loading' : ''}`}
+              onClick={handleSubmitReceipt}
+              disabled={isSubmittingTx}
+            >
+              {isSubmittingTx ? (
+                <>
+                  <Loader2 size={18} className="spin-loader" />
+                  <span>{lang === 'bn' ? 'ভেরিফাই ও ক্রেডিট হচ্ছে...' : 'Verifying & Crediting...'}</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={18} />
+                  <span>{lang === 'bn' ? 'ডিপোজিট কনফার্ম ও ক্রেডিট করুন' : 'Confirm & Credit Deposit'}</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* ---------------- STEP 3: SUCCESS CREDITED CONFIRMATION ---------------- */}
+        {step === 'credited' && (
+          <div className="deposit-success-view">
+            <div className="success-icon-badge">
+              <CheckCircle2 size={44} color="#00b074" strokeWidth={2.4} />
+            </div>
+
+            <h3 className="success-headline">
+              {lang === 'bn' ? 'ডিপোজিট সফলভাবে জমা হয়েছে!' : 'Deposit Successfully Credited!'}
+            </h3>
+            <div className="success-amount-display">
+              +{parseFloat(amount || 3).toFixed(2)} USDT
+            </div>
+
+            <div className="success-details-card">
+              <div className="success-row">
+                <span className="success-lbl">{lang === 'bn' ? 'নেটওয়ার্ক' : 'Network'}</span>
+                <span className="success-val">USDT (BEP20)</span>
+              </div>
+              <div className="success-row">
+                <span className="success-lbl">{lang === 'bn' ? 'স্ট্যাটাস' : 'Status'}</span>
+                <span className="success-val green" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <CheckCircle2 size={13} /> Completed
+                </span>
+              </div>
+              <div className="success-row">
+                <span className="success-lbl">TxID</span>
+                <span className="success-val mono">
+                  {txId ? `${txId.substring(0, 8)}...${txId.substring(txId.length - 6)}` : '0x889...d4e3'}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="btn-verify-deposit"
+              onClick={handleClose}
+            >
+              <Sparkles size={17} />
+              <span>{lang === 'bn' ? 'ড্যাশবোর্ডে ফিরে যান' : 'Back to Dashboard'}</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </dialog>
+  );
+};
