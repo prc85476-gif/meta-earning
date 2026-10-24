@@ -609,6 +609,90 @@ async function rejectWithdrawal(txId, reason = 'Rejected by Admin') {
   return { transaction: txUpdate.rows[0], user: userUpdate.rows[0] };
 }
 
+// Admin Helper: Search user by username, telegram_id, or name
+async function searchUser(query) {
+  const clean = (query || '').toString().trim().replace('@', '');
+  if (!clean) return [];
+  const res = await pool.query(
+    `SELECT * FROM users 
+     WHERE telegram_id = $1 
+        OR LOWER(username) = LOWER($1) 
+        OR LOWER(first_name) LIKE LOWER($2) 
+     ORDER BY created_at DESC 
+     LIMIT 5`,
+    [clean, `%${clean}%`]
+  );
+  return res.rows;
+}
+
+// Admin Helper: Get Top 10 Referrers
+async function getTopReferrers(limit = 10) {
+  const res = await pool.query(
+    `SELECT telegram_id, first_name, username, total_referrals, total_referral_bonus, hashrate 
+     FROM users 
+     WHERE total_referrals > 0 
+     ORDER BY total_referrals DESC 
+     LIMIT $1`,
+    [limit]
+  );
+  return res.rows;
+}
+
+// Admin Helper: Get Top 10 Investors
+async function getTopInvestors(limit = 10) {
+  const res = await pool.query(
+    `SELECT telegram_id, first_name, username, total_deposit, deposit_balance, hashrate 
+     FROM users 
+     WHERE total_deposit > 0 
+     ORDER BY total_deposit DESC 
+     LIMIT $1`,
+    [limit]
+  );
+  return res.rows;
+}
+
+// Admin Helper: Get User Transactions
+async function getUserTransactions(telegramId, limit = 10) {
+  const res = await pool.query(
+    `SELECT * FROM transactions 
+     WHERE telegram_id = $1 
+     ORDER BY created_at DESC 
+     LIMIT $2`,
+    [telegramId.toString(), limit]
+  );
+  return res.rows;
+}
+
+// Admin Helper: Get all user IDs for Broadcast
+async function getAllUserTelegramIds() {
+  const res = await pool.query(`SELECT telegram_id FROM users`);
+  return res.rows.map(r => r.telegram_id);
+}
+
+// Admin Helper: Reset user locked BEP20 address
+async function resetUserWithdrawAddress(telegramId) {
+  const res = await pool.query(
+    `UPDATE users SET withdraw_address = NULL, updated_at = NOW() WHERE telegram_id = $1 RETURNING *`,
+    [telegramId.toString()]
+  );
+  return res.rows[0];
+}
+
+// Admin Helper: Adjust User Balance (Credit/Debit)
+async function adjustUserBalance(telegramId, amount, type = 'wallet_balance') {
+  const num = Number(amount);
+  const column = type === 'deposit_balance' ? 'deposit_balance' : 'wallet_balance';
+  const res = await pool.query(
+    `UPDATE users 
+     SET ${column} = GREATEST(0, ${column} + $1),
+         updated_at = NOW() 
+     WHERE telegram_id = $2 
+     RETURNING *`,
+    [num, telegramId.toString()]
+  );
+  return res.rows[0];
+}
+
 module.exports = {
   pool,
   initDatabase,
@@ -628,5 +712,12 @@ module.exports = {
   getPendingWithdrawals,
   getRecentDeposits,
   approveWithdrawal,
-  rejectWithdrawal
+  rejectWithdrawal,
+  searchUser,
+  getTopReferrers,
+  getTopInvestors,
+  getUserTransactions,
+  getAllUserTelegramIds,
+  resetUserWithdrawAddress,
+  adjustUserBalance
 };
