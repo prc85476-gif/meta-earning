@@ -7,6 +7,8 @@ const {
 } = require('./db');
 
 let mainUserBotInstance = null;
+let globalWebappUrl = '';
+let botUsername = 'Meta_Farming_bot';
 
 function sendNotificationToUser(telegramId, text, options = {}) {
   if (mainUserBotInstance && telegramId) {
@@ -15,7 +17,145 @@ function sendNotificationToUser(telegramId, text, options = {}) {
   }
 }
 
+// 1. Notify user when mining reaches 0.01 USDT
+function notifyUserClaimReady(telegramId, amount = '0.0100') {
+  if (!mainUserBotInstance || !telegramId) return;
+  const webappUrl = globalWebappUrl || process.env.WEBAPP_URL || 'http://localhost:3000';
+  const text =
+`⚡ *Claim Your Mining Bonus!* ⚡\n\n` +
+`🎉 You have mined *${Number(amount).toFixed(4)} USDT*!\n` +
+`Your mining bonus is ready to claim to your main balance.\n\n` +
+`Tap below to claim now:`;
+
+  return mainUserBotInstance.sendMessage(telegramId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: '🚀 Claim Now',
+            web_app: { url: webappUrl }
+          }
+        ]
+      ]
+    }
+  }).catch(err => console.error(`Error sending claim notification to ${telegramId}:`, err.message));
+}
+
+// 2. Notify user when 24 hours pass and mining stops
+function notifyUserMiningStopped(telegramId) {
+  if (!mainUserBotInstance || !telegramId) return;
+  const webappUrl = globalWebappUrl || process.env.WEBAPP_URL || 'http://localhost:3000';
+  const text =
+`⏳ *Your Mining Has Stopped!* ⏳\n\n` +
+`Your 24-hour mining cycle has ended.\n` +
+`Please claim your daily earnings & start mining again to continue earning rewards!\n\n` +
+`Tap below to start:`;
+
+  return mainUserBotInstance.sendMessage(telegramId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: '⚡ Start Mining',
+            web_app: { url: webappUrl }
+          }
+        ]
+      ]
+    }
+  }).catch(err => console.error(`Error sending 24h stopped notification to ${telegramId}:`, err.message));
+}
+
+// 3. Notify referrer when referred friend starts mining
+function notifyReferrerInviteSuccess(referrerId, friendName = 'Friend') {
+  if (!mainUserBotInstance || !referrerId) return;
+  const webappUrl = globalWebappUrl || process.env.WEBAPP_URL || 'http://localhost:3000';
+  const name = friendName || 'A new miner';
+  const text =
+`🎉 *Invite Success! Mining Boosted!* ⚡\n\n` +
+`Your friend *${name}* just joined and started mining!\n` +
+`✅ +1 Referral counted successfully.\n` +
+`⚡ Your mining speed has been boosted!\n\n` +
+`Invite more friends to multiply your daily earnings:`;
+
+  const shareText = encodeURIComponent('⚡ Join Meta Farm to mine free USDT daily on Binance Smart Chain!');
+  const shareUrl = `https://t.me/share/url?url=https://t.me/${botUsername}?start=${referrerId}&text=${shareText}`;
+
+  return mainUserBotInstance.sendMessage(referrerId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '👥 Invite More', url: shareUrl }
+        ],
+        [
+          { text: '🚀 Open Meta Farm', web_app: { url: webappUrl } }
+        ]
+      ]
+    }
+  }).catch(err => console.error(`Error sending invite success notification to ${referrerId}:`, err.message));
+}
+
+// 4. Notify user when withdrawal is submitted (instant bot SMS with 1-2 min wait & channel buttons)
+function notifyUserWithdrawalSubmitted(telegramId, { amount, address, network = 'BEP20' } = {}) {
+  if (!mainUserBotInstance || !telegramId) return;
+  const payoutChannel = process.env.PAYOUT_CHANNEL_URL || 'https://t.me/Meta_Farming_Payment_Proof';
+  const newsChannel = process.env.NEWS_CHANNEL_URL || 'https://t.me/metafarmingnews';
+
+  const text =
+`✅ *Your Withdraw Success!* ⚡\n\n` +
+`Your withdrawal request has been submitted successfully.\n` +
+`⏳ *Wait 1 theke 2 miniuts* for processing & verification.\n\n` +
+`💰 *Amount:* \`$${Number(amount).toFixed(2)} USDT\`\n` +
+`🔒 *Wallet Address:*\n\`${address}\`\n` +
+`🌐 *Network:* ${network} (BNB Smart Chain)\n\n` +
+`Join our official channels for real-time payment proofs & updates:`;
+
+  return mainUserBotInstance.sendMessage(telegramId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '💳 Payout Channel', url: payoutChannel },
+          { text: '📢 News Channel', url: newsChannel }
+        ]
+      ]
+    }
+  }).catch(err => console.error(`Error sending withdraw submitted alert to ${telegramId}:`, err.message));
+}
+
+// 5. Notify user when withdrawal is approved and sent by admin (with BscScan & Payout channel buttons)
+function notifyUserWithdrawalApproved(telegramId, { amount, address, payoutTxHash, tx_hash, network = 'BEP20' } = {}) {
+  if (!mainUserBotInstance || !telegramId) return;
+  const payoutChannel = process.env.PAYOUT_CHANNEL_URL || 'https://t.me/Meta_Farming_Payment_Proof';
+  const txHash = payoutTxHash || tx_hash || '';
+  const bscScanUrl = txHash ? `https://bscscan.com/tx/${txHash}` : `https://bscscan.com/address/${address}`;
+
+  const text =
+`🎉 *Withdraw Sent to Your Wallet!* 💸\n\n` +
+`Your withdrawal has been successfully approved and sent to your wallet!\n\n` +
+`💰 *Amount:* \`$${Number(amount).toFixed(2)} USDT\`\n` +
+`🔒 *Wallet Address:*\n\`${address}\`\n` +
+`🔗 *Transaction Hash:*\n\`${txHash}\`\n` +
+`🌐 *Network:* ${network} (BNB Smart Chain)\n\n` +
+`Status: *Completed* ✅`;
+
+  return mainUserBotInstance.sendMessage(telegramId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '🔍 BscScan', url: bscScanUrl },
+          { text: '💳 Payout Channel', url: payoutChannel }
+        ]
+      ]
+    }
+  }).catch(err => console.error(`Error sending withdraw approved alert to ${telegramId}:`, err.message));
+}
+
 function initTelegramBot(webappUrl) {
+  globalWebappUrl = webappUrl;
   const token = process.env.TELEGRAM_BOT_TOKEN;
 
   if (!token || token === 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
@@ -32,7 +172,7 @@ function initTelegramBot(webappUrl) {
     mainUserBotInstance = bot;
     console.log('🚀 Telegram Bot is running in polling mode with Neon DB integration...');
 
-    let botUsername = 'Meta_Farming_bot';
+    botUsername = 'Meta_Farming_bot';
     bot.getMe().then(me => {
       if (me && me.username) {
         botUsername = me.username;
@@ -318,4 +458,12 @@ function initTelegramBot(webappUrl) {
   }
 }
 
-module.exports = { initTelegramBot, sendNotificationToUser };
+module.exports = {
+  initTelegramBot,
+  sendNotificationToUser,
+  notifyUserClaimReady,
+  notifyUserMiningStopped,
+  notifyReferrerInviteSuccess,
+  notifyUserWithdrawalSubmitted,
+  notifyUserWithdrawalApproved
+};

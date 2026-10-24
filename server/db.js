@@ -78,6 +78,14 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_transactions_tx_hash ON transactions(tx_hash);
       CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
       CREATE INDEX IF NOT EXISTS idx_users_withdraw_addr ON users(withdraw_address);
+
+      -- Migration: 24h mining session tracking & activation
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS mining_started_at TIMESTAMP WITH TIME ZONE DEFAULT NULL;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mining_active BOOLEAN DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS has_notified_claim_001 BOOLEAN DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS has_notified_24h_stopped BOOLEAN DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS has_activated_referral BOOLEAN DEFAULT FALSE;
+      ALTER TABLE referrals ADD COLUMN IF NOT EXISTS has_started_mining BOOLEAN DEFAULT FALSE;
     `);
 
     console.log('✅ Neon PostgreSQL Database & Tables initialized successfully!');
@@ -122,15 +130,12 @@ async function getOrCreateUser(userData) {
       );
       try {
         await pool.query(
-          `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username)
-           VALUES ($1, $2, $3, $4)
+          `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username, has_started_mining)
+           VALUES ($1, $2, $3, $4, FALSE)
            ON CONFLICT (referred_id) DO NOTHING`,
           [validReferrer, telegram_id, `${first_name} ${last_name}`.trim(), username]
         );
-        await pool.query(
-          `UPDATE users SET total_referrals = total_referrals + 1 WHERE telegram_id = $1`,
-          [validReferrer]
-        );
+        // Note: total_referrals is NOT incremented on /start. Only incremented when user starts mining!
       } catch (e) {
         console.error('Error linking referral for existing user:', e.message);
       }
@@ -156,15 +161,12 @@ async function getOrCreateUser(userData) {
   if (validReferrer) {
     try {
       await pool.query(
-        `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username, has_started_mining)
+         VALUES ($1, $2, $3, $4, FALSE)
          ON CONFLICT (referred_id) DO NOTHING`,
         [validReferrer, telegram_id, `${first_name} ${last_name}`.trim(), username]
       );
-      await pool.query(
-        `UPDATE users SET total_referrals = total_referrals + 1 WHERE telegram_id = $1`,
-        [validReferrer]
-      );
+      // Note: total_referrals is NOT incremented on /start. Only incremented when user starts mining!
     } catch (e) {
       console.error('Error recording referral:', e.message);
     }
@@ -395,20 +397,85 @@ async function recordPlanPurchase({ telegramId, planId, planName, planPrice, dai
   return updateRes.rows[0];
 }
 
-// Helper: Claim Mined Balance to Main Wallet Balance
-async function recordMiningClaim({ telegramId, amount }) {
+// Helper: Start 24h Mining Cycle & Activate Referral on first mining start
+async function startUserMining(telegramId) {
+  const tid = telegramId.toString();
+
+  let activatedReferrerId = null;
+  let userDetails = null;
+
+  const userCheck = await pool.query(
+    'SELECT telegram_id, first_name, last_name, username, referred_by, has_activated_referral FROM users WHERE telegram_id = $1',
+    [tid]
+  );
+
+  if (userCheck.rows.length > 0) {
+    const u = userCheck.rows[0];
+    userDetails = u;
+    // ONLY count referral if this user was referred AND has not started mining before!
+    if (u.referred_by && !u.has_activated_referral) {
+      activatedReferrerId = u.referred_by;
+
+      // 1. Mark user as activated so it NEVER counts again
+      await pool.query(
+        'UPDATE users SET has_activated_referral = TRUE WHERE telegram_id = $1',
+        [tid]
+      );
+
+      // 2. Mark in referrals table
+      await pool.query(
+        'UPDATE referrals SET has_started_mining = TRUE WHERE referred_id = $1',
+        [tid]
+      );
+
+      // 3. Increment referrer total_referrals and boost hashrate!
+      await pool.query(
+        `UPDATE users 
+         SET total_referrals = total_referrals + 1,
+             hashrate = hashrate + 0.10,
+             updated_at = NOW()
+         WHERE telegram_id = $1`,
+        [activatedReferrerId]
+      );
+    }
+  }
+
+  const res = await pool.query(
+    `UPDATE users 
+     SET mining_started_at = NOW(),
+         is_mining_active = TRUE,
+         mined_unclaimed = 0,
+         has_notified_claim_001 = FALSE,
+         has_notified_24h_stopped = FALSE,
+         updated_at = NOW()
+     WHERE telegram_id = $1
+     RETURNING *`,
+    [tid]
+  );
+
+  return {
+    user: res.rows[0],
+    activatedReferrerId,
+    referredUser: userDetails
+  };
+}
+
+// Helper: Claim Mined Balance and optionally restart 24h mining
+async function claimMinedReward(telegramId, amount, restart = false) {
   const tid = telegramId.toString();
   const amt = Number(amount);
   if (amt <= 0) throw new Error('Invalid claim amount');
 
-  const updateRes = await pool.query(
+  const res = await pool.query(
     `UPDATE users 
      SET wallet_balance = wallet_balance + $1,
          mined_unclaimed = 0,
+         is_mining_active = $2,
+         mining_started_at = CASE WHEN $2 = TRUE THEN NOW() ELSE NULL END,
          updated_at = NOW()
-     WHERE telegram_id = $2
+     WHERE telegram_id = $3
      RETURNING *`,
-    [amt, tid]
+    [amt, restart, tid]
   );
 
   await addTransaction({
@@ -417,10 +484,15 @@ async function recordMiningClaim({ telegramId, amount }) {
     amount: amt,
     network: 'Internal',
     status: 'Completed',
-    note: 'Daily mining claimed to main wallet'
+    note: '24-hour mining reward claimed to main wallet'
   });
 
-  return updateRes.rows[0];
+  return res.rows[0];
+}
+
+// Helper: Backwards-compatible recordMiningClaim
+async function recordMiningClaim({ telegramId, amount, restart = false }) {
+  return claimMinedReward(telegramId, amount, restart);
 }
 
 // Helper: Get Bot Global Statistics (All Users, Total Balance, Total Deposit, Total Withdraw)
@@ -549,6 +621,8 @@ module.exports = {
   recordWithdrawalRequest,
   recordPlanPurchase,
   recordMiningClaim,
+  startUserMining,
+  claimMinedReward,
   getBotGlobalStats,
   getTransactionById,
   getPendingWithdrawals,

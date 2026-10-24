@@ -28,10 +28,38 @@ export function App() {
     return saved !== null ? parseFloat(saved) : 5.00;
   });
 
-  // Mined balance starts at 0.00122000 USDT as requested
+  // 24-Hour Mining Session Constants & State
+  const SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 Hours in ms
+  const MIN_CLAIM_AMOUNT = 0.01; // Minimum $0.01 USDT required to claim
+
+  const [miningStartTime, setMiningStartTime] = useState(() => {
+    const saved = localStorage.getItem('usdt_mining_start_time');
+    return saved ? parseInt(saved, 10) : null;
+  });
+
+  const [isMiningActive, setIsMiningActive] = useState(() => {
+    return localStorage.getItem('usdt_is_mining_active') === 'true';
+  });
+
+  // Track amount claimed so far within the current 24-hour cycle
+  const [claimedInSession, setClaimedInSession] = useState(() => {
+    const saved = localStorage.getItem('usdt_claimed_in_session');
+    return saved !== null ? parseFloat(saved) : 0.00;
+  });
+
+  const [isClaiming, setIsClaiming] = useState(false);
+  const [miningStatus, setMiningStatus] = useState('idle'); // 'idle' | 'mining' | 'completed'
+  const [miningTimeLeftMs, setMiningTimeLeftMs] = useState(SESSION_DURATION_MS);
+
+  // Mined balance: 0 when idle/unstarted, smoothly generated up to daily rate during 24h
   const [minedBalance, setMinedBalance] = useState(() => {
-    const saved = localStorage.getItem('usdt_mined_balance');
-    return saved !== null ? parseFloat(saved) : 0.00122000;
+    const savedStart = localStorage.getItem('usdt_mining_start_time');
+    const savedActive = localStorage.getItem('usdt_is_mining_active') === 'true';
+    if (!savedStart || !savedActive) {
+      const savedMined = localStorage.getItem('usdt_mined_balance');
+      return savedMined !== null ? parseFloat(savedMined) : 0.00000000;
+    }
+    return 0.00000000;
   });
 
   // Track purchased/unlocked plans (stacking daily profit and hashrate)
@@ -222,6 +250,19 @@ export function App() {
           if (u.withdraw_address) {
             localStorage.setItem('usdt_locked_withdraw_address', u.withdraw_address);
           }
+          if (u.mining_started_at && u.is_mining_active) {
+            const serverStart = new Date(u.mining_started_at).getTime();
+            const elapsed = Date.now() - serverStart;
+            if (elapsed < SESSION_DURATION_MS) {
+              setMiningStartTime(serverStart);
+              setIsMiningActive(true);
+              localStorage.setItem('usdt_mining_start_time', serverStart.toString());
+              localStorage.setItem('usdt_is_mining_active', 'true');
+            } else {
+              setIsMiningActive(false);
+              localStorage.setItem('usdt_is_mining_active', 'false');
+            }
+          }
           if (Array.isArray(u.purchased_plans) && u.purchased_plans.length > 0) {
             setPurchasedPlanIds(u.purchased_plans);
           }
@@ -307,63 +348,230 @@ export function App() {
     return `${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GH/s`;
   }, [purchasedPlanIds]);
 
-  // Real-time simulated countdown / mining counter increment!
-  // Ticking smoothly every 150ms based on stacked totalDailyEarning
+  const hasNotifiedClaimRef = useRef(false);
+  const hasNotifiedStoppedRef = useRef(false);
+
+  // 24-Hour Mining Engine: Real-time clock calculation with 0.01$ minimum claim support
   useEffect(() => {
-    const hourlyRateNum = totalDailyEarning / 24;
-    // Base increment per tick: (hourlyRate / 3600 seconds) * (0.15s)
-    const baseIncrementPerTick = (hourlyRateNum / 3600) * 0.15;
+    if (!miningStartTime || !isMiningActive) {
+      const savedMined = parseFloat(localStorage.getItem('usdt_mined_balance') || '0');
+      if (savedMined > 0.000001) {
+        setMiningStatus('completed');
+        setMinedBalance(savedMined);
+      } else {
+        setMiningStatus('idle');
+        setMinedBalance(0);
+      }
+      setMiningTimeLeftMs(SESSION_DURATION_MS);
+      return;
+    }
 
-    const interval = setInterval(() => {
-      setMinedBalance((prev) => prev + baseIncrementPerTick);
-    }, 150);
+    const updateMiningTick = () => {
+      const now = Date.now();
+      const elapsed = now - miningStartTime;
 
+      if (elapsed >= SESSION_DURATION_MS) {
+        // 24 Hours completed: Mining turns OFF automatically!
+        setIsMiningActive(false);
+        setMiningStatus('completed');
+        setMiningTimeLeftMs(0);
+
+        // Trigger 24h stopped notification to Telegram Bot
+        if (!hasNotifiedStoppedRef.current && user?.id) {
+          hasNotifiedStoppedRef.current = true;
+          fetch('/api/mining/notify-threshold', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.id, type: 'session_stopped' })
+          }).catch(() => {});
+        }
+
+        // Remaining uncollected amount from this 24h session
+        const remainingUncollected = Math.max(0, totalDailyEarning - claimedInSession);
+        setMinedBalance(remainingUncollected);
+
+        localStorage.setItem('usdt_is_mining_active', 'false');
+        localStorage.setItem('usdt_mined_balance', remainingUncollected.toString());
+      } else {
+        // Active 24h mining session
+        setMiningStatus('mining');
+        const remaining = SESSION_DURATION_MS - elapsed;
+        setMiningTimeLeftMs(remaining);
+
+        // Calculate smooth progress
+        const progress = Math.max(0, Math.min(1, elapsed / SESSION_DURATION_MS));
+        const totalGeneratedSoFar = totalDailyEarning * progress;
+        const currentUnclaimed = Math.max(0, totalGeneratedSoFar - claimedInSession);
+
+        // Trigger 0.01 USDT reached notification to Telegram Bot
+        if (currentUnclaimed >= MIN_CLAIM_AMOUNT && !hasNotifiedClaimRef.current && user?.id) {
+          hasNotifiedClaimRef.current = true;
+          fetch('/api/mining/notify-threshold', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.id, type: 'claim_ready', amount: currentUnclaimed })
+          }).catch(() => {});
+        }
+
+        setMinedBalance(currentUnclaimed);
+        localStorage.setItem('usdt_mined_balance', currentUnclaimed.toString());
+      }
+    };
+
+    updateMiningTick();
+    const interval = setInterval(updateMiningTick, 150);
     return () => clearInterval(interval);
-  }, [totalDailyEarning]);
+  }, [miningStartTime, isMiningActive, totalDailyEarning, claimedInSession, user?.id]);
 
   const showToast = (msg) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(''), 3000);
   };
 
-  // Claim mined balance to main wallet
+  // Claim mined balance during active session (Requires minimum 0.01 USDT)
   const handleClaim = () => {
-    if (minedBalance <= 0.000001) return;
+    if (minedBalance < MIN_CLAIM_AMOUNT || isClaiming) return;
+    setIsClaiming(true);
+    triggerHaptic('medium');
+
     const claimedAmt = minedBalance;
-    setWalletBalance((prev) => prev + claimedAmt);
-    setMinedBalance(0.00000000);
+    setTimeout(() => {
+      // 1. Credit to Main Wallet Balance
+      setWalletBalance((prev) => {
+        const next = prev + claimedAmt;
+        localStorage.setItem('usdt_wallet_balance', next.toFixed(6));
+        return next;
+      });
 
-    const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-    const newTx = {
-      type: 'claim',
-      amount: claimedAmt,
-      network: 'Internal Mining Pool',
-      date: timeStr,
-      status: 'Completed'
-    };
-    setTransactions((prev) => [newTx, ...prev]);
+      // 2. Add to claimed amount in current 24h cycle
+      setClaimedInSession((prev) => {
+        const next = prev + claimedAmt;
+        localStorage.setItem('usdt_claimed_in_session', next.toString());
+        return next;
+      });
 
-    const newActivity = {
-      id: Date.now().toString(),
-      type: 'mining',
-      title: 'Mining Reward',
-      subtitle: 'Daily mining income',
-      amount: `+${claimedAmt.toFixed(6)} USDT`,
-      time: timeStr
-    };
-    setActivities((prev) => [newActivity, ...prev]);
+      // 3. Reset active uncollected balance to 0
+      setMinedBalance(0);
+      localStorage.setItem('usdt_mined_balance', '0');
+      setIsClaiming(false);
+      triggerHaptic('success');
 
-    showToast(t.claimedSuccess);
+      try {
+        confetti({
+          particleCount: 45,
+          spread: 60,
+          origin: { y: 0.3 }
+        });
+      } catch (e) {}
 
-    // Sync claim to Neon PostgreSQL Database
-    fetch('/api/claim', {
+      const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const newTx = {
+        type: 'claim',
+        amount: claimedAmt,
+        network: 'Internal Mining Pool',
+        date: timeStr,
+        status: 'Completed'
+      };
+      setTransactions((prev) => [newTx, ...prev]);
+
+      const newActivity = {
+        id: Date.now().toString(),
+        type: 'mining',
+        title: 'Mining Reward',
+        subtitle: 'Claimed to Main Balance',
+        amount: `+${claimedAmt.toFixed(6)} USDT`,
+        time: timeStr
+      };
+      setActivities((prev) => [newActivity, ...prev]);
+
+      fetch('/api/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user?.id || '987654321',
+          amount: claimedAmt
+        })
+      }).catch(err => console.log('Notice saving claim to DB:', err.message));
+
+      showToast(
+        lang === 'bn'
+          ? `+${claimedAmt.toFixed(4)} USDT ওয়ালেটে ট্রান্সফার হয়েছে!`
+          : `+${claimedAmt.toFixed(4)} USDT claimed to Main Balance!`
+      );
+    }, 600);
+  };
+
+  // Start fresh 24-hour mining cycle (or claim remaining and restart)
+  const handleStartMining = () => {
+    triggerHaptic('medium');
+
+    // If there is any remaining uncollected balance from completed 24h session, transfer it first!
+    if (minedBalance > 0.000001) {
+      const remainingAmt = minedBalance;
+      setWalletBalance((prev) => {
+        const next = prev + remainingAmt;
+        localStorage.setItem('usdt_wallet_balance', next.toFixed(6));
+        return next;
+      });
+
+      const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const newTx = {
+        type: 'claim',
+        amount: remainingAmt,
+        network: 'Internal Mining Pool',
+        date: timeStr,
+        status: 'Completed'
+      };
+      setTransactions((prev) => [newTx, ...prev]);
+
+      fetch('/api/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user?.id || '987654321',
+          amount: remainingAmt
+        })
+      }).catch(err => console.log('Notice saving claim to DB:', err.message));
+    }
+
+    // Begin fresh 24-hour session
+    const now = Date.now();
+    setMiningStartTime(now);
+    setIsMiningActive(true);
+    setClaimedInSession(0);
+    setMinedBalance(0);
+    hasNotifiedClaimRef.current = false;
+    hasNotifiedStoppedRef.current = false;
+    setMiningTimeLeftMs(SESSION_DURATION_MS);
+    setMiningStatus('mining');
+
+    localStorage.setItem('usdt_mining_start_time', now.toString());
+    localStorage.setItem('usdt_is_mining_active', 'true');
+    localStorage.setItem('usdt_claimed_in_session', '0');
+    localStorage.setItem('usdt_mined_balance', '0');
+
+    fetch('/api/mining/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userId: user?.id || '987654321',
-        amount: claimedAmt
+        userId: user?.id || '987654321'
       })
-    }).catch(err => console.log('Notice saving claim to DB:', err.message));
+    }).catch(err => console.log('Notice starting mining in DB:', err.message));
+
+    showToast(
+      lang === 'bn'
+        ? `⚡ ২৪ ঘণ্টার ইউএসডিটি মাইনিং শুরু হয়েছে! (নূন্যতম ক্লেইম $০.০১)`
+        : `⚡ 24-hour USDT mining started! (Min claim $0.01)`
+    );
+
+    triggerHaptic('success');
+    try {
+      confetti({
+        particleCount: 50,
+        spread: 70,
+        origin: { y: 0.3 }
+      });
+    } catch (e) {}
   };
 
   // Handle verified BSC deposit
@@ -644,17 +852,22 @@ export function App() {
       <main className="main-content">
         {currentTab === 'mining' && (
           <>
-            {/* 1. MINING COUNTDOWN & DISPLAY CARD */}
+            {/* 1. 24-HOUR MINING COUNTDOWN & DISPLAY CARD */}
             <MiningCard
               minedBalance={minedBalance}
               activePlan={activePlan}
               lang={lang}
-              onClaim={handleClaim}
               walletBalance={walletBalance}
               totalInvestment={totalInvestment}
               depositBalance={depositBalance}
               dailyEarning={`${totalDailyEarning.toFixed(3)} USDT`}
               miningSpeed={totalHashrate}
+              miningStatus={miningStatus}
+              miningTimeLeftMs={miningTimeLeftMs}
+              onStartMining={handleStartMining}
+              onClaim={handleClaim}
+              isClaiming={isClaiming}
+              minClaimAmount={MIN_CLAIM_AMOUNT}
             />
 
             {/* 2. DEPOSIT & WITHDRAW ACTION BUTTONS (As explicitly requested by user) */}

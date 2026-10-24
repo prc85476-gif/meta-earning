@@ -3,10 +3,17 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const QRCode = require('qrcode');
-const { initTelegramBot } = require('./bot');
+const {
+  initTelegramBot,
+  notifyUserClaimReady,
+  notifyUserMiningStopped,
+  notifyReferrerInviteSuccess,
+  notifyUserWithdrawalSubmitted
+} = require('./bot');
 const { initAdminBot, notifyAdminNewWithdrawal, notifyAdminNewDeposit } = require('./adminBot');
 const { verifyBscDeposit } = require('./bscVerification');
 const {
+  pool,
   initDatabase,
   getOrCreateUser,
   getUserFullDetails,
@@ -15,6 +22,8 @@ const {
   recordWithdrawalRequest,
   recordPlanPurchase,
   recordMiningClaim,
+  startUserMining,
+  claimMinedReward,
   getBotGlobalStats
 } = require('./db');
 
@@ -63,20 +72,23 @@ app.get('/api/qr', async (req, res) => {
 // Sync User from Telegram WebApp
 app.post('/api/user/sync', async (req, res) => {
   try {
-    const { id, first_name, last_name, username, refCode } = req.body;
-    if (!id) {
+    const actualId = req.body.id || req.body.telegramId || req.body.userId;
+    const actualRef = req.body.refCode || req.body.referredBy || req.body.start_param;
+    const { first_name, firstName, last_name, lastName, username } = req.body;
+
+    if (!actualId) {
       return res.status(400).json({ success: false, message: 'User ID is required' });
     }
 
     await getOrCreateUser({
-      id,
-      first_name,
-      last_name,
+      id: actualId,
+      first_name: first_name || firstName,
+      last_name: last_name || lastName,
       username,
-      refCode
+      refCode: actualRef
     });
 
-    const userDetails = await getUserFullDetails(id);
+    const userDetails = await getUserFullDetails(actualId);
     res.json({ success: true, user: userDetails });
   } catch (error) {
     console.error('API /api/user/sync error:', error);
@@ -100,23 +112,103 @@ app.get('/api/user/:id', async (req, res) => {
   }
 });
 
-// Process Daily Claim (Credits to Main Wallet Balance)
-app.post('/api/claim', async (req, res) => {
+// Start 24h Mining Session
+app.post('/api/mining/start', async (req, res) => {
   try {
-    const { userId, amount } = req.body;
+    const { userId } = req.body;
+    const actualUserId = (userId || '987654321').toString();
+    await getOrCreateUser({ id: actualUserId });
+
+    const { user: updatedUser, activatedReferrerId, referredUser } = await startUserMining(actualUserId);
+
+    if (activatedReferrerId) {
+      const friendName = (referredUser?.first_name || referredUser?.username || 'Friend').trim();
+      notifyReferrerInviteSuccess(activatedReferrerId, friendName);
+    }
+
+    res.json({
+      success: true,
+      miningStartedAt: updatedUser.mining_started_at,
+      isMiningActive: updatedUser.is_mining_active,
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error('API /api/mining/start error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Process 24h Mining Claim (and optional immediate restart)
+app.post('/api/mining/claim', async (req, res) => {
+  try {
+    const { userId, amount, restart = false } = req.body;
+    const actualUserId = (userId || '987654321').toString();
     const numAmt = parseFloat(amount);
     if (isNaN(numAmt) || numAmt <= 0) {
       return res.status(400).json({ success: false, message: 'Invalid claim amount' });
     }
 
-    const updatedUser = await recordMiningClaim({
-      telegramId: userId || '987654321',
-      amount: numAmt
-    });
+    await getOrCreateUser({ id: actualUserId });
+    const updatedUser = await claimMinedReward(actualUserId, numAmt, Boolean(restart));
 
     res.json({
       success: true,
       walletBalance: Number(updatedUser.wallet_balance),
+      miningStartedAt: updatedUser.mining_started_at,
+      isMiningActive: updatedUser.is_mining_active,
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error('API /api/mining/claim error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Trigger Instant Notification from Mini App (0.01 USDT reached or 24h stopped)
+app.post('/api/mining/notify-threshold', async (req, res) => {
+  try {
+    const { userId, type, amount } = req.body;
+    const actualUserId = (userId || '').toString();
+    if (!actualUserId) return res.status(400).json({ success: false });
+
+    if (type === 'claim_ready') {
+      const uRes = await pool.query('SELECT has_notified_claim_001 FROM users WHERE telegram_id = $1', [actualUserId]);
+      if (uRes.rows.length > 0 && !uRes.rows[0].has_notified_claim_001) {
+        await pool.query('UPDATE users SET has_notified_claim_001 = TRUE, updated_at = NOW() WHERE telegram_id = $1', [actualUserId]);
+        notifyUserClaimReady(actualUserId, amount || '0.0100');
+      }
+    } else if (type === 'session_stopped') {
+      const uRes = await pool.query('SELECT has_notified_24h_stopped FROM users WHERE telegram_id = $1', [actualUserId]);
+      if (uRes.rows.length > 0 && !uRes.rows[0].has_notified_24h_stopped) {
+        await pool.query('UPDATE users SET is_mining_active = FALSE, has_notified_24h_stopped = TRUE, updated_at = NOW() WHERE telegram_id = $1', [actualUserId]);
+        notifyUserMiningStopped(actualUserId);
+      }
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error in /api/mining/notify-threshold:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Process Daily Claim (Backwards compatibility)
+app.post('/api/claim', async (req, res) => {
+  try {
+    const { userId, amount, restart = false } = req.body;
+    const actualUserId = (userId || '987654321').toString();
+    const numAmt = parseFloat(amount);
+    if (isNaN(numAmt) || numAmt <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid claim amount' });
+    }
+
+    await getOrCreateUser({ id: actualUserId });
+    const updatedUser = await claimMinedReward(actualUserId, numAmt, Boolean(restart));
+
+    res.json({
+      success: true,
+      walletBalance: Number(updatedUser.wallet_balance),
+      miningStartedAt: updatedUser.mining_started_at,
+      isMiningActive: updatedUser.is_mining_active,
       user: updatedUser
     });
   } catch (error) {
@@ -234,7 +326,14 @@ app.post('/api/withdraw', async (req, res) => {
       network: network || 'BEP20'
     });
 
-    // Send Instant Push Alert to Admin Bot with Approve & Reject buttons
+    // 1. Send instant notification to User's Bot (Wait 1-2 minutes & Channel buttons)
+    notifyUserWithdrawalSubmitted(actualUserId, {
+      amount: numAmount,
+      address,
+      network: network || 'BEP20'
+    });
+
+    // 2. Send Instant Push Alert to Admin Bot with Approve & Reject buttons
     notifyAdminNewWithdrawal({
       id: transaction.id,
       telegramId: actualUserId,
@@ -343,10 +442,60 @@ async function startServer() {
 
       // Initialize Telegram Admin Bot (@alhajbf2)
       initAdminBot();
+
+      // Start Background Mining Notifications Worker (Every 25 seconds)
+      setInterval(checkMiningNotifications, 25000);
     });
   } catch (err) {
     console.error('Fatal Server Startup Error:', err);
     process.exit(1);
+  }
+}
+
+// Background Worker: Checks all active miners and sends Telegram Bot messages
+async function checkMiningNotifications() {
+  try {
+    const res = await pool.query(`
+      SELECT telegram_id, mining_started_at, is_mining_active, daily_mining_rate, has_notified_claim_001, has_notified_24h_stopped
+      FROM users
+      WHERE is_mining_active = TRUE AND mining_started_at IS NOT NULL
+    `);
+
+    const now = Date.now();
+    const SESSION_MS = 24 * 60 * 60 * 1000;
+
+    for (const u of res.rows) {
+      const startTime = new Date(u.mining_started_at).getTime();
+      const elapsed = now - startTime;
+      const dailyRate = Number(u.daily_mining_rate) || 0.029;
+
+      // 1. 24 Hours finished: Mining stops and notify user!
+      if (elapsed >= SESSION_MS) {
+        if (!u.has_notified_24h_stopped) {
+          await pool.query(
+            `UPDATE users 
+             SET is_mining_active = FALSE, has_notified_24h_stopped = TRUE, updated_at = NOW() 
+             WHERE telegram_id = $1`,
+            [u.telegram_id]
+          );
+          notifyUserMiningStopped(u.telegram_id);
+        }
+      } 
+      // 2. Reached 0.01 USDT threshold: Notify user to claim!
+      else {
+        const progress = Math.min(1, elapsed / SESSION_MS);
+        const minedSoFar = dailyRate * progress;
+        if (minedSoFar >= 0.01 && !u.has_notified_claim_001) {
+          await pool.query(
+            `UPDATE users SET has_notified_claim_001 = TRUE, updated_at = NOW() WHERE telegram_id = $1`,
+            [u.telegram_id]
+          );
+          notifyUserClaimReady(u.telegram_id, minedSoFar);
+        }
+      }
+    }
+  } catch (err) {
+    // Silently continue
   }
 }
 

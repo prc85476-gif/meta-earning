@@ -1,39 +1,30 @@
-import React, { useState } from 'react';
-import { TrendingUp, Zap, Coins, Wallet, ArrowRight, Loader2 } from 'lucide-react';
-import confetti from 'canvas-confetti';
-import { formatMiningNumber, formatUSDT } from '../utils/formatters';
-import { triggerHaptic } from '../utils/telegram';
+import React from 'react';
+import { TrendingUp, Zap, Coins, Wallet, Play, ArrowRight, Loader2 } from 'lucide-react';
+import { formatMiningNumber } from '../utils/formatters';
 
 export const MiningCard = ({
-  minedBalance,
+  minedBalance = 0,
   activePlan,
   lang,
-  onClaim,
-  walletBalance,
+  walletBalance = 0,
   totalInvestment = 0.00,
   depositBalance,
   dailyEarning,
-  miningSpeed
+  miningSpeed,
+  miningStatus = 'idle', // 'idle' | 'mining' | 'completed'
+  miningTimeLeftMs = 86400000,
+  onStartMining,
+  onClaim,
+  isClaiming = false,
+  minClaimAmount = 0.01
 }) => {
-  const [isClaiming, setIsClaiming] = useState(false);
-
-  const handleClaimClick = () => {
-    if (isClaiming || minedBalance <= 0.000001) return;
-    triggerHaptic('medium');
-    setIsClaiming(true);
-
-    setTimeout(() => {
-      onClaim();
-      setIsClaiming(false);
-      triggerHaptic('success');
-      try {
-        confetti({
-          particleCount: 40,
-          spread: 60,
-          origin: { y: 0.3 }
-        });
-      } catch (e) {}
-    }, 1200);
+  const formatCountdown = (ms) => {
+    if (!ms || ms <= 0) return '00:00:00';
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
   const formattedMined = formatMiningNumber(minedBalance, 8);
@@ -42,8 +33,11 @@ export const MiningCard = ({
   const decPart = dotIndex !== -1 ? formattedMined.substring(dotIndex + 1) : '00000000';
   
   // First 6 decimals in dark navy, last 2 micro digits in bright green
-  const prefixDec = decPart.substring(0, 6); // e.g. 000107
-  const tailDec = decPart.substring(6);       // e.g. 05
+  const prefixDec = decPart.substring(0, 6);
+  const tailDec = decPart.substring(6);
+
+  const isMiningActive = miningStatus === 'mining';
+  const isClaimReady = minedBalance >= minClaimAmount;
 
   return (
     <section className="mining-card-v2" aria-label="Mining Status">
@@ -72,7 +66,42 @@ export const MiningCard = ({
         </div>
       </div>
 
-      {/* 2. Mining Digits & Compact Claim Button */}
+      {/* 2. 24h Session Status Bar */}
+      <div className="mining-session-bar">
+        {isMiningActive && (
+          <div className="session-status-pill status-active">
+            <span className="pulse-dot"></span>
+            <span className="session-label">
+              {lang === 'bn' 
+                ? `২৪ ঘণ্টা মাইনিং চালু (নূন্যতম ক্লেইম $${minClaimAmount})` 
+                : `24h Mining Active (Min Claim $${minClaimAmount})`}
+            </span>
+            <span className="session-countdown">
+              ⏳ {formatCountdown(miningTimeLeftMs)} {lang === 'bn' ? 'বাকি' : 'left'}
+            </span>
+          </div>
+        )}
+
+        {miningStatus === 'idle' && (
+          <div className="session-status-pill status-idle">
+            <span className="idle-dot"></span>
+            <span className="session-label">
+              {lang === 'bn' ? '২৪ ঘণ্টার দৈনিক মাইনিং শুরু করতে Start চাপুন' : '24h Session Inactive • Click Start to Begin'}
+            </span>
+          </div>
+        )}
+
+        {miningStatus === 'completed' && (
+          <div className="session-status-pill status-completed">
+            <span className="completed-dot"></span>
+            <span className="session-label">
+              {lang === 'bn' ? '২৪ ঘণ্টা শেষ ও মাইনিং বন্ধ! Start চাপলে রিওয়ার্ড যোগ হবে ও আবার শুরু হবে' : '24h Complete & Stopped! Click Start to claim & restart'}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* 3. Mining Digits & Action Button (Start when idle/completed, Claim when active) */}
       <div className="mining-balance-display">
         <div className="mining-digits-row">
           <span className="main-digits">
@@ -82,28 +111,48 @@ export const MiningCard = ({
           <span className="currency-usdt">USDT</span>
         </div>
 
-        <button
-          type="button"
-          className={`btn-claim-compact ${isClaiming ? 'claiming' : ''}`}
-          onClick={handleClaimClick}
-          disabled={isClaiming || minedBalance <= 0.000001}
-          title={minedBalance <= 0.000001 ? "Mining in progress..." : "Claim to Wallet"}
-        >
-          {isClaiming ? (
-            <>
-              <Loader2 size={13} className="claim-spinner" color="#ffffff" strokeWidth={2.5} />
-              <span>Claiming</span>
-            </>
-          ) : (
-            <>
-              <span>Claim</span>
-              <ArrowRight size={13} color="#ffffff" strokeWidth={2.5} />
-            </>
-          )}
-        </button>
+        {isMiningActive ? (
+          <button
+            type="button"
+            className={`btn-claim-compact ${isClaimReady ? 'btn-claim-ready' : 'btn-claim-locked'}`}
+            onClick={onClaim}
+            disabled={isClaiming || !isClaimReady}
+            title={
+              !isClaimReady
+                ? (lang === 'bn'
+                    ? `নূন্যতম ক্লেইম $${minClaimAmount} USDT (বর্তমানে মাইন্ড হয়েছে: $${formatMiningNumber(minedBalance, 4)} USDT)`
+                    : `Minimum claim is $${minClaimAmount} USDT (Currently: $${formatMiningNumber(minedBalance, 4)} USDT)`)
+                : (lang === 'bn'
+                    ? `$${formatMiningNumber(minedBalance, 4)} USDT মেইন ব্যালেন্সে ট্রান্সফার করুন`
+                    : `Claim $${formatMiningNumber(minedBalance, 4)} USDT to Main Wallet`)
+            }
+          >
+            {isClaiming ? (
+              <>
+                <Loader2 size={13} className="claim-spinner" color="#ffffff" strokeWidth={2.5} />
+                <span>Claiming</span>
+              </>
+            ) : (
+              <>
+                <span>Claim</span>
+                <ArrowRight size={13} color="#ffffff" strokeWidth={2.5} />
+              </>
+            )}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={`btn-claim-compact btn-mining-start ${miningStatus === 'completed' ? 'btn-ready-pulse' : ''}`}
+            onClick={onStartMining}
+            title={miningStatus === 'completed' ? 'Start next 24-hour mining cycle' : 'Start 24-hour mining cycle'}
+          >
+            <Play size={12} fill="#ffffff" color="#ffffff" strokeWidth={2.2} />
+            <span>Start</span>
+          </button>
+        )}
       </div>
 
-      {/* 3. 3-Column Stats Row with Dividers */}
+      {/* 4. 3-Column Stats Row with Dividers */}
       <div className="mining-three-stats">
         {/* Column 1: Daily Earning */}
         <div className="stat-col">

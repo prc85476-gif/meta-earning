@@ -8,7 +8,7 @@ const {
   rejectWithdrawal,
   pool
 } = require('./db');
-const { sendNotificationToUser } = require('./bot');
+const { sendNotificationToUser, notifyUserWithdrawalApproved } = require('./bot');
 
 let adminBotInstance = null;
 let savedAdminChatId = null;
@@ -266,17 +266,13 @@ function initAdminBot() {
             await bot.sendMessage(chatId, approvedMsg, { parse_mode: 'Markdown' });
           });
 
-          // Send confirmation message to the User via Main Bot (@Meta_Farming_bot)
-          const userAlert = 
-`🎉 *আপনার উইথড্র রিকোয়েস্ট অ্যাপ্রুভ হয়েছে এবং ওয়ালেটে পাঠানো হয়েছে!* 🎉\n\n` +
-`💰 *পরিমাণ:* \`$${Number(transaction.amount).toFixed(2)} USDT\`\n` +
-`🌐 *নেটওয়ার্ক:* BEP20 (BNB Smart Chain)\n` +
-`🔒 *আপনার ওয়ালেট:* \`${transaction.wallet_address}\`\n` +
-`🔗 *Transaction Hash:*\n\`${payoutTxHash}\`\n` +
-`📅 *স্ট্যাটাস:* Completed (সফলভাবে সম্পন্ন) ✅\n\n` +
-`ফান্ড আপনার ওয়ালেটে ট্রান্সফার করা হয়েছে। সাম্প্রতিক অ্যাকাউন্ট হিস্টোরিতে স্ট্যাটাস Completed দেখতে পাবেন!`;
-
-          sendNotificationToUser(transaction.telegram_id, userAlert);
+          // Send confirmation message to the User via Main Bot (@Meta_Farming_bot) with BscScan & Payout channel buttons
+          notifyUserWithdrawalApproved(transaction.telegram_id, {
+            amount: transaction.amount,
+            address: transaction.wallet_address,
+            payoutTxHash,
+            network: transaction.network || 'BEP20'
+          });
 
         } catch (err) {
           console.error('Error approving withdrawal:', err);
