@@ -165,6 +165,8 @@ function notifyUserWithdrawalApproved(telegramId, { amount, address, payoutTxHas
       ]
     }
   }).catch(err => console.error(`Error sending withdraw approved alert to ${telegramId}:`, err.message));
+}
+
 // 7. Notify user when deposit is verified and credited (with BscScan button)
 function notifyUserDepositCredited(telegramId, { amount, network = 'BEP20 (BSC)', txHash } = {}) {
   if (!mainUserBotInstance || !telegramId) return;
