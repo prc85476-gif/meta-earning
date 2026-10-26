@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Header } from './components/Header';
 import { MiningCard } from './components/MiningCard';
 import { QuickActions } from './components/QuickActions';
@@ -180,75 +180,156 @@ export function App() {
 
   const t = translations[lang] || translations.en;
 
-  // Initialize Telegram WebApp and sync with Neon PostgreSQL
+  const mapTransactionsToActivities = useCallback((txList) => {
+    if (!Array.isArray(txList) || txList.length === 0) return [];
+    return txList.map((tx) => {
+      const numAmt = parseFloat(tx.amount || 0);
+      const isWithdraw = tx.type === 'withdraw';
+      const isDeposit = tx.type === 'deposit';
+      const isClaim = tx.type === 'claim';
+      const isRefBonus = tx.type === 'referral_bonus';
+
+      let title = 'Mining Reward';
+      let subtitle = 'Daily mining income';
+      let amtStr = `+${numAmt.toFixed(2)} USDT`;
+
+      if (isWithdraw) {
+        title = 'Withdrawal';
+        const addr = tx.wallet_address || '';
+        const shortAddr = addr.length > 10 ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : addr;
+        subtitle = `USDT(${tx.network || 'BEP20'}) • ${shortAddr || 'BEP20'}`;
+        amtStr = `-${numAmt.toFixed(2)} USDT`;
+      } else if (isDeposit) {
+        title = 'Deposit';
+        subtitle = `USDT (${tx.network || 'BEP20'}) deposit`;
+        amtStr = `+${numAmt.toFixed(2)} USDT`;
+      } else if (isRefBonus) {
+        title = 'Referral Bonus';
+        subtitle = 'From your friend';
+        amtStr = `+${numAmt.toFixed(2)} USDT`;
+      }
+
+      const d = tx.created_at ? new Date(tx.created_at) : new Date();
+      const now = new Date();
+      const isToday = d.toDateString() === now.toDateString();
+      const timeStr = isToday 
+        ? `Today, ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+      return {
+        id: String(tx.id),
+        type: isWithdraw ? 'withdraw' : (isDeposit ? 'deposit' : (isClaim ? 'mining' : 'referral')),
+        title,
+        subtitle,
+        amount: amtStr,
+        time: timeStr,
+        status: tx.status || 'Completed'
+      };
+    });
+  }, []);
+
+  // Reusable DB Synchronizer: Instantly reflects withdrawal approval, balance, and plans
+  const syncWithDb = useCallback(async (showToastNotice = false) => {
+    const tgUser = getTelegramUser();
+    const actualId = tgUser?.id || user?.id || (tgUser ? String(tgUser.id) : null);
+    if (!actualId) return;
+
+    const startRef = getTelegramStartParam();
+    try {
+      const res = await fetch('/api/user/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: actualId,
+          first_name: tgUser?.first_name || user?.first_name,
+          last_name: tgUser?.last_name || user?.last_name,
+          username: tgUser?.username || user?.username,
+          refCode: startRef || undefined
+        })
+      });
+      const data = await res.json();
+      if (data && data.success && data.user) {
+        const u = data.user;
+        if (u.wallet_balance !== undefined) setWalletBalance(Number(u.wallet_balance));
+        if (u.deposit_balance !== undefined) setDepositBalance(Number(u.deposit_balance));
+        if (u.total_deposit !== undefined) setTotalInvestment(Number(u.total_deposit));
+        if (u.total_withdraw !== undefined) setTotalWithdraw(Number(u.total_withdraw));
+        if (u.total_referral_bonus !== undefined) setTotalReferralBonus(Number(u.total_referral_bonus));
+        if (u.withdraw_address) {
+          localStorage.setItem('usdt_locked_withdraw_address', u.withdraw_address);
+        }
+        if (u.mining_started_at && u.is_mining_active) {
+          const serverStart = new Date(u.mining_started_at).getTime();
+          const elapsed = Date.now() - serverStart;
+          if (elapsed < SESSION_DURATION_MS) {
+            setMiningStartTime(serverStart);
+            setIsMiningActive(true);
+            localStorage.setItem('usdt_mining_start_time', serverStart.toString());
+            localStorage.setItem('usdt_is_mining_active', 'true');
+          } else {
+            setIsMiningActive(false);
+            localStorage.setItem('usdt_is_mining_active', 'false');
+          }
+        }
+        if (Array.isArray(u.purchased_plans) && u.purchased_plans.length > 0) {
+          setPurchasedPlanIds(u.purchased_plans);
+        }
+        if (u.daily_mining_rate !== undefined) {
+          setDailyMiningRate(Number(u.daily_mining_rate));
+        }
+        if (Array.isArray(u.referrals)) {
+          const mapped = u.referrals.map((r) => ({
+            id: r.referred_id,
+            name: r.referred_name || r.first_name || (r.referred_id ? `User ${r.referred_id}` : 'Member'),
+            username: r.referred_username || r.username ? `@${r.referred_username || r.username}` : (r.referred_id ? `ID: ${r.referred_id}` : '@user'),
+            photo_url: r.photo_url || null,
+            time: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Joined via link',
+            timeBn: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'লিংকে জয়েন করেছে',
+            depositAmount: Number(r.deposit_amount || 0),
+            commission: Number(r.commission_earned || 0),
+            hasDeposited: Number(r.deposit_amount || 0) > 0
+          }));
+          setReferralList(mapped);
+        }
+
+        // SYNC TRANSACTIONS & ACTIVITIES: Update Pending -> Completed instantly
+        if (Array.isArray(u.transactions) && u.transactions.length > 0) {
+          const mappedActs = mapTransactionsToActivities(u.transactions);
+          setActivities(mappedActs);
+          setTransactions(u.transactions);
+        }
+
+        if (showToastNotice) {
+          showToast(lang === 'bn' ? 'ডাটা ও হিস্টোরি রিফ্রেশ হয়েছে ✅' : 'History & Balance updated ✅');
+        }
+      }
+    } catch (err) {
+      console.log('Notice syncing user with DB:', err.message);
+    }
+  }, [user, lang, mapTransactionsToActivities]);
+
+  // Initial Sync on WebApp start
   useEffect(() => {
     initTelegramApp();
     const tgUser = getTelegramUser();
     if (tgUser) {
       setUser(tgUser);
-      const startRef = getTelegramStartParam();
-      // Synchronize with Neon DB
-      fetch('/api/user/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: tgUser.id,
-          first_name: tgUser.first_name,
-          last_name: tgUser.last_name,
-          username: tgUser.username,
-          refCode: startRef || undefined
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.success && data.user) {
-          const u = data.user;
-          if (u.wallet_balance !== undefined) setWalletBalance(Number(u.wallet_balance));
-          if (u.deposit_balance !== undefined) setDepositBalance(Number(u.deposit_balance));
-          if (u.total_deposit !== undefined) setTotalInvestment(Number(u.total_deposit));
-          if (u.total_withdraw !== undefined) setTotalWithdraw(Number(u.total_withdraw));
-          if (u.total_referral_bonus !== undefined) setTotalReferralBonus(Number(u.total_referral_bonus));
-          if (u.withdraw_address) {
-            localStorage.setItem('usdt_locked_withdraw_address', u.withdraw_address);
-          }
-          if (u.mining_started_at && u.is_mining_active) {
-            const serverStart = new Date(u.mining_started_at).getTime();
-            const elapsed = Date.now() - serverStart;
-            if (elapsed < SESSION_DURATION_MS) {
-              setMiningStartTime(serverStart);
-              setIsMiningActive(true);
-              localStorage.setItem('usdt_mining_start_time', serverStart.toString());
-              localStorage.setItem('usdt_is_mining_active', 'true');
-            } else {
-              setIsMiningActive(false);
-              localStorage.setItem('usdt_is_mining_active', 'false');
-            }
-          }
-          if (Array.isArray(u.purchased_plans) && u.purchased_plans.length > 0) {
-            setPurchasedPlanIds(u.purchased_plans);
-          }
-          if (u.daily_mining_rate !== undefined) {
-            setDailyMiningRate(Number(u.daily_mining_rate));
-          }
-          if (Array.isArray(u.referrals)) {
-            const mapped = u.referrals.map((r) => ({
-              id: r.referred_id,
-              name: r.referred_name || r.first_name || (r.referred_id ? `User ${r.referred_id}` : 'Member'),
-              username: r.referred_username || r.username ? `@${r.referred_username || r.username}` : (r.referred_id ? `ID: ${r.referred_id}` : '@user'),
-              photo_url: r.photo_url || null,
-              time: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Joined via link',
-              timeBn: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'লিংকে জয়েন করেছে',
-              depositAmount: Number(r.deposit_amount || 0),
-              commission: Number(r.commission_earned || 0),
-              hasDeposited: Number(r.deposit_amount || 0) > 0
-            }));
-            setReferralList(mapped);
-          }
-        }
-      })
-      .catch(err => console.log('Notice syncing user with DB:', err.message));
     }
-  }, []);
+    syncWithDb();
+  }, [syncWithDb]);
+
+  // Auto-sync with DB every 6 seconds to update withdrawal status from Pending to Completed instantly
+  useEffect(() => {
+    const timer = setInterval(() => {
+      syncWithDb(false);
+    }, 6000);
+    return () => clearInterval(timer);
+  }, [syncWithDb]);
+
+  // Sync immediately when switching tabs (e.g. to Profile or Mining)
+  useEffect(() => {
+    syncWithDb(false);
+  }, [currentTab, syncWithDb]);
 
   // Save changes to localStorage
   useEffect(() => {
@@ -810,7 +891,7 @@ export function App() {
         activePlan={activePlan}
         lang={lang}
         onOpenLanguage={() => setIsLanguageModalOpen(true)}
-        onRefresh={() => showToast(lang === 'bn' ? 'ব্যালেন্স আপডেট হয়েছে' : 'Balance updated')}
+        onRefresh={() => syncWithDb(true)}
       />
 
       {/* Main View Area */}
