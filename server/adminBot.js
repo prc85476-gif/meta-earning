@@ -40,30 +40,92 @@ const DEPOSIT_MINING_PLANS = [
 const DATA_DIR = path.join(__dirname, 'data');
 const ADMIN_STATE_FILE = path.join(DATA_DIR, 'admin_settings.json');
 
-function loadAdminChatId() {
+function loadAdminSettings() {
   try {
     if (fs.existsSync(ADMIN_STATE_FILE)) {
-      const data = JSON.parse(fs.readFileSync(ADMIN_STATE_FILE, 'utf8') || '{}');
-      return data.savedAdminChatId || null;
+      return JSON.parse(fs.readFileSync(ADMIN_STATE_FILE, 'utf8') || '{}');
     }
   } catch (e) {}
-  return null;
+  return {};
+}
+
+function saveAdminSettings(settings) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(ADMIN_STATE_FILE, JSON.stringify(settings, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+function loadAdminChatIds() {
+  const data = loadAdminSettings();
+  const list = new Set();
+  if (Array.isArray(data.adminChatIds)) {
+    data.adminChatIds.forEach(id => list.add(id));
+  }
+  if (data.savedAdminChatId) {
+    list.add(data.savedAdminChatId);
+  }
+  return Array.from(list);
 }
 
 function saveAdminChatId(id) {
   try {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    let data = {};
-    if (fs.existsSync(ADMIN_STATE_FILE)) {
-      data = JSON.parse(fs.readFileSync(ADMIN_STATE_FILE, 'utf8') || '{}');
-    }
-    data.savedAdminChatId = id;
-    fs.writeFileSync(ADMIN_STATE_FILE, JSON.stringify(data, null, 2), 'utf8');
+    if (!id) return;
+    const data = loadAdminSettings();
+    const list = new Set(Array.isArray(data.adminChatIds) ? data.adminChatIds : []);
+    list.add(id);
+    data.adminChatIds = Array.from(list);
+    data.savedAdminChatId = id; // keep backwards compatibility
+    saveAdminSettings(data);
   } catch (e) {}
 }
 
+function loadExtraAdmins() {
+  const data = loadAdminSettings();
+  return Array.isArray(data.extraAdmins) ? data.extraAdmins : [];
+}
+
+function addExtraAdmin(adminIdentifier) {
+  const cleaned = String(adminIdentifier || '').toLowerCase().replace('@', '').trim();
+  if (!cleaned) return false;
+  const data = loadAdminSettings();
+  const list = new Set(Array.isArray(data.extraAdmins) ? data.extraAdmins : []);
+  list.add(cleaned);
+  data.extraAdmins = Array.from(list);
+  saveAdminSettings(data);
+  return true;
+}
+
+function removeExtraAdmin(adminIdentifier) {
+  const cleaned = String(adminIdentifier || '').toLowerCase().replace('@', '').trim();
+  const data = loadAdminSettings();
+  const list = new Set(Array.isArray(data.extraAdmins) ? data.extraAdmins : []);
+  list.delete(cleaned);
+  data.extraAdmins = Array.from(list);
+  saveAdminSettings(data);
+  return true;
+}
+
+function getAuthorizedAdmins() {
+  const envAdmins = [
+    process.env.ADMIN_USERNAME,
+    process.env.ADMIN_USERNAMES,
+    process.env.ADMIN_IDS,
+    process.env.ADMIN_ID,
+    'alhajbf2'
+  ].filter(Boolean).join(',');
+
+  const fromEnv = envAdmins
+    .split(/[,\s]+/)
+    .map(s => s.toLowerCase().replace('@', '').trim())
+    .filter(Boolean);
+
+  const fromFile = loadExtraAdmins().map(s => String(s).toLowerCase().replace('@', '').trim()).filter(Boolean);
+  return Array.from(new Set([...fromEnv, ...fromFile]));
+}
+
 let adminBotInstance = null;
-let savedAdminChatId = loadAdminChatId();
+let savedAdminChatId = loadAdminChatIds()[0] || null;
 const adminState = {}; // Tracks interactive input state for admin chat (e.g. broadcast, search)
 
 const AUTHORIZED_ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'alhajbf2').toLowerCase().replace('@', '');
@@ -82,14 +144,16 @@ function initAdminBot() {
     console.log('🛡️  Admin Bot is running in polling mode...');
 
     bot.getMe().then(me => {
-      console.log(`🤖 Admin Bot @${me.username} connected. Authorized Admin: @${AUTHORIZED_ADMIN_USERNAME}`);
+      console.log(`🤖 Admin Bot @${me.username} connected. Authorized Admins: ${getAuthorizedAdmins().join(', ')}`);
     }).catch(err => console.error('Admin bot info error:', err.message));
 
-    // Security check middleware
+    // Security check middleware: supports username (with/without @) and Telegram ID for all admins
     const isAuthorizedAdmin = (from) => {
       if (!from) return false;
-      const username = (from.username || '').toLowerCase().replace('@', '');
-      return username === AUTHORIZED_ADMIN_USERNAME;
+      const username = (from.username || '').toLowerCase().replace('@', '').trim();
+      const userId = from.id ? from.id.toString().trim() : '';
+      const allowed = getAuthorizedAdmins();
+      return (username && allowed.includes(username)) || (userId && allowed.includes(userId));
     };
 
     // Helper: Safe Markdown escaper for legacy Telegram Markdown mode
@@ -352,11 +416,16 @@ function initAdminBot() {
 `• \`/start\` - Open Admin Control Dashboard\n` +
 `• \`/wallet\` - View Hot Wallet (USDT & BNB Gas balances)\n` +
 `• \`/search <username|id>\` - Search and view any user account\n` +
-`• \`/broadcast <message>\` - Broadcast an announcement to all miners\n` +
+`• \`/credit <id> <amount>\` - Instant credit deposit balance + user SMS\n` +
+`• \`/gift <id> <planId>\` - Instant gift mining plan + user SMS\n` +
 `• \`/adjust <id> <amount> [wallet|deposit]\` - Credit or debit user balance\n` +
-`• \`/cancel\` - Cancel current search or broadcast prompt`;
+`• \`/broadcast <message>\` - Broadcast an announcement to all miners\n` +
+`• \`/admins\` - List all authorized administrators\n` +
+`• \`/addadmin <username|id>\` - Authorize an additional administrator\n` +
+`• \`/removeadmin <username|id>\` - Remove an authorized administrator\n` +
+`• \`/cancel\` - Cancel current search or prompt`;
 
-      bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
+      safeSendMessage(chatId, helpText, { parse_mode: 'Markdown' });
     });
 
     // /cancel command
@@ -488,6 +557,191 @@ function initAdminBot() {
       } catch (err) {
         bot.sendMessage(chatId, '❌ Error adjusting balance: ' + err.message);
       }
+    });
+
+    // /credit, /deposit, or /add command (e.g. `/credit 123456789 10` or `/deposit 123456789 25`)
+    bot.onText(/\/(credit|deposit|add)\s+(\S+)\s+(\S+)/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!isAuthorizedAdmin(msg.from)) return;
+      savedAdminChatId = chatId;
+      saveAdminChatId(chatId);
+
+      const targetId = match[2];
+      const cleanedAmt = match[3].replace(/[^0-9.-]/g, '');
+      const amount = parseFloat(cleanedAmt);
+
+      if (isNaN(amount) || amount <= 0) {
+        return safeSendMessage(chatId, '❌ Invalid amount. Usage: `/credit <telegramId> <amount>` (e.g. `/credit 123456789 10`)', { parse_mode: 'Markdown' });
+      }
+
+      try {
+        const updated = await adjustUserBalance(targetId, amount, 'deposit_balance');
+        if (!updated) {
+          return safeSendMessage(chatId, `❌ User with ID \`${targetId}\` not found in database.`, { parse_mode: 'Markdown' });
+        }
+
+        // Send SMS to user bot
+        await sendNotificationToUser(targetId,
+`📥 *Deposit Balance Credited!* 💳\n` +
+`────────────────────────\n` +
+`• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
+`• 💰 *New Deposit Balance:* $${Number(updated.deposit_balance).toFixed(2)} USDT\n\n` +
+`Your deposit balance has been credited to your account! You can now use this balance to activate or upgrade your Mining Plans 🚀`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: '🚀 Open App & Activate Plan',
+                    web_app: { url: process.env.WEBAPP_URL || 'https://your-domain.com' }
+                  }
+                ]
+              ]
+            }
+          }
+        );
+
+        const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+        const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+
+        const confirmText = 
+`✅ *DEPOSIT BALANCE CREDITED!* ✅\n` +
+`────────────────────────\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
+`• 🆔 *Target ID:* \`${targetId}\`\n` +
+`• 💳 *Amount Credited:* \`+$${amount.toFixed(2)} USDT\`\n` +
+`• 📥 *New Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n` +
+`• 💵 *Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n\n` +
+`_The user has received an SMS notification about the deposit in their bot._`;
+
+        safeSendMessage(chatId, confirmText, {
+          parse_mode: 'Markdown',
+          reply_markup: getUserActionButtons(targetId)
+        });
+      } catch (err) {
+        safeSendMessage(chatId, '❌ Error crediting deposit: ' + err.message);
+      }
+    });
+
+    // /gift command (e.g. `/gift 123456789 bronze-3` or `/gift 123456789 gold-20`)
+    bot.onText(/\/gift\s+(\S+)(?:\s+(\S+))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!isAuthorizedAdmin(msg.from)) return;
+      savedAdminChatId = chatId;
+      saveAdminChatId(chatId);
+
+      const targetId = match[1];
+      const planId = match[2];
+
+      if (!planId) {
+        const availablePlans = DEPOSIT_MINING_PLANS.map(p => `• \`${p.id}\` - ${p.name} ($${p.price})`).join('\n');
+        return safeSendMessage(chatId, `🎁 *Gift Mining Plan Command*\n\nUsage: \`/gift <telegramId> <planId>\`\n\n*Available Plans:*\n${availablePlans}`, { parse_mode: 'Markdown' });
+      }
+
+      const plan = DEPOSIT_MINING_PLANS.find(p => p.id === planId.toLowerCase().trim());
+      if (!plan) {
+        return safeSendMessage(chatId, `❌ Unknown Plan ID \`${planId}\`. Use one of: ${DEPOSIT_MINING_PLANS.map(p => p.id).join(', ')}`, { parse_mode: 'Markdown' });
+      }
+
+      try {
+        const adminActor = (msg.from.username ? `@${msg.from.username}` : msg.from.first_name) || 'Admin';
+        const updated = await giftMiningPlanToUser({
+          telegramId: targetId,
+          planId: plan.id,
+          planName: plan.name,
+          dailyProfit: plan.dailyProfit,
+          hashrateBonus: plan.hashrate,
+          adminUsername: adminActor
+        });
+
+        // Notify user bot
+        await sendNotificationToUser(targetId,
+`🎁 *SPECIAL GIFT FROM ADMIN!* 🎁\n` +
+`────────────────────────\n` +
+`Congratulations! You have received a free mining plan gift from Admin:\n` +
+`• 📦 *Gifted Plan:* ${plan.name} ($${plan.price}.00 USDT value)\n` +
+`• ⚡ *Daily Profit Boost:* +$${plan.dailyProfit} USDT/day\n` +
+`• 🚀 *Hashrate Boost:* +${plan.hashrateDisplay}\n\n` +
+`Your mining speed and daily earnings have been upgraded permanently! Happy Mining 🚀`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: '🚀 Open Mining App',
+                    web_app: { url: process.env.WEBAPP_URL || 'https://your-domain.com' }
+                  }
+                ]
+              ]
+            }
+          }
+        );
+
+        const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+        const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+
+        const successMsg =
+`✅ *MINING PLAN GIFTED SUCCESSFULLY!* ✅\n` +
+`────────────────────────\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
+`• 🆔 *Telegram ID:* \`${targetId}\`\n` +
+`• 🎁 *Gifted Plan:* ${escapeMd(plan.name)} ($${plan.price}.00 value)\n` +
+`• ⚡ *New Daily Rate:* \`${Number(updated.daily_mining_rate).toFixed(4)} USDT/day\`\n` +
+`• 🚀 *New Hashrate:* \`${Number(updated.hashrate).toFixed(2)} GH/s\`\n\n` +
+`_The user has received an SMS notification in their bot._`;
+
+        safeSendMessage(chatId, successMsg, {
+          parse_mode: 'Markdown',
+          reply_markup: getUserActionButtons(targetId)
+        });
+      } catch (err) {
+        safeSendMessage(chatId, '❌ Failed to gift plan: ' + err.message);
+      }
+    });
+
+    // /admins command to view all configured administrators
+    bot.onText(/\/admins/, async (msg) => {
+      const chatId = msg.chat.id;
+      if (!isAuthorizedAdmin(msg.from)) return;
+      savedAdminChatId = chatId;
+      saveAdminChatId(chatId);
+
+      const allAdmins = getAuthorizedAdmins();
+      const activeChats = loadAdminChatIds();
+
+      const text =
+`🛡️ *AUTHORIZED ADMINISTRATORS* 🛡️\n` +
+`────────────────────────\n` +
+`• 👥 *Total Admins:* \`${allAdmins.length}\`\n` +
+`• 📋 *Admins List:*\n` +
+allAdmins.map(a => `   - \`${a}\``).join('\n') + `\n\n` +
+`• 🔔 *Active Alert Chat IDs:* ${activeChats.length}\n` +
+activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
+`💡 *Tip:* Use \`/addadmin <username|id>\` to add another admin or \`/removeadmin <username|id>\` to remove.`;
+
+      safeSendMessage(chatId, text, { parse_mode: 'Markdown' });
+    });
+
+    // /addadmin <username|id> command
+    bot.onText(/\/addadmin\s+(\S+)/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!isAuthorizedAdmin(msg.from)) return;
+      const targetAdmin = match[1];
+      const added = addExtraAdmin(targetAdmin);
+      if (added) {
+        safeSendMessage(chatId, `✅ Successfully added admin: \`${escapeMd(targetAdmin)}\`!\nThey can now use this admin bot immediately.`, { parse_mode: 'Markdown' });
+      } else {
+        safeSendMessage(chatId, `❌ Failed to add admin: invalid format.`);
+      }
+    });
+
+    // /removeadmin <username|id> command
+    bot.onText(/\/removeadmin\s+(\S+)/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!isAuthorizedAdmin(msg.from)) return;
+      const targetAdmin = match[1];
+      removeExtraAdmin(targetAdmin);
+      safeSendMessage(chatId, `🗑️ Removed extra admin: \`${escapeMd(targetAdmin)}\``, { parse_mode: 'Markdown' });
     });
 
     // Helper: Start Step 1 of Broadcast Flow
@@ -781,12 +1035,14 @@ function initAdminBot() {
 
       // 4. Add / Adjust Deposit Balance Input
       if (state.step === 'awaiting_deposit_amount') {
-        const amount = parseFloat(msg.text);
+        const rawText = (msg.text || '').trim();
+        const cleaned = rawText.replace(/[^0-9.-]/g, '');
+        const amount = parseFloat(cleaned);
         const targetUserId = state.targetUserId;
         delete adminState[chatId];
 
         if (isNaN(amount) || amount === 0) {
-          return bot.sendMessage(chatId, '❌ Invalid amount. Action cancelled.', {
+          return safeSendMessage(chatId, '❌ Invalid amount entered. Balance adjustment cancelled.', {
             reply_markup: { inline_keyboard: [[{ text: '👤 Back to Profile', callback_data: `view_user_${targetUserId}` }]] }
           });
         }
@@ -795,41 +1051,59 @@ function initAdminBot() {
           const updated = await adjustUserBalance(targetUserId, amount, 'deposit_balance');
 
           if (amount > 0) {
-            sendNotificationToUser(targetUserId, 
-`📥 *Deposit Balance Credited!* 💳\n\n` +
-`Admin @${AUTHORIZED_ADMIN_USERNAME} has credited your Deposit Balance with:\n` +
-`• 💵 *Amount:* +$${amount.toFixed(2)} USDT\n` +
+            await sendNotificationToUser(targetUserId, 
+`📥 *Deposit Balance Credited!* 💳\n` +
+`────────────────────────\n` +
+`• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
 `• 💰 *New Deposit Balance:* $${Number(updated.deposit_balance).toFixed(2)} USDT\n\n` +
-`You can use this balance immediately to activate higher Mining Plans!`
+`Your deposit balance has been credited to your account! You can now use this balance to activate or upgrade your Mining Plans 🚀`,
+              {
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: '🚀 Open App & Activate Plan',
+                        web_app: { url: process.env.WEBAPP_URL || 'https://your-domain.com' }
+                      }
+                    ]
+                  ]
+                }
+              }
             );
           }
 
-          const confirmText =
-`✅ *DEPOSIT BALANCE ADJUSTED!* ✅\n` +
-`────────────────────────\n` +
-`• 👤 *User:* ${updated.first_name || ''} (@${updated.username || 'N/A'})\n` +
-`• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
-`• 💳 *Adjustment:* \`${amount >= 0 ? '+' : ''}$${amount.toFixed(2)} USDT\`\n` +
-`• 📥 *New Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n` +
-`• 💵 *Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\``;
+          const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+          const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
 
-          return bot.sendMessage(chatId, confirmText, {
+          const confirmText =
+`✅ *DEPOSIT BALANCE CREDITED!* ✅\n` +
+`────────────────────────\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
+`• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
+`• 💳 *Amount Added:* \`${amount >= 0 ? '+' : ''}$${amount.toFixed(2)} USDT\`\n` +
+`• 📥 *New Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n` +
+`• 💵 *Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n\n` +
+`_The user has received an SMS notification about the deposit._`;
+
+          return safeSendMessage(chatId, confirmText, {
             parse_mode: 'Markdown',
             reply_markup: getUserActionButtons(targetUserId)
           });
         } catch (err) {
-          return bot.sendMessage(chatId, '❌ Failed to adjust deposit balance: ' + err.message);
+          return safeSendMessage(chatId, '❌ Failed to adjust deposit balance: ' + err.message);
         }
       }
 
       // 5. Add / Adjust Wallet Balance Input
       if (state.step === 'awaiting_wallet_amount') {
-        const amount = parseFloat(msg.text);
+        const rawText = (msg.text || '').trim();
+        const cleaned = rawText.replace(/[^0-9.-]/g, '');
+        const amount = parseFloat(cleaned);
         const targetUserId = state.targetUserId;
         delete adminState[chatId];
 
         if (isNaN(amount) || amount === 0) {
-          return bot.sendMessage(chatId, '❌ Invalid amount. Action cancelled.', {
+          return safeSendMessage(chatId, '❌ Invalid amount entered. Balance adjustment cancelled.', {
             reply_markup: { inline_keyboard: [[{ text: '👤 Back to Profile', callback_data: `view_user_${targetUserId}` }]] }
           });
         }
@@ -838,30 +1112,33 @@ function initAdminBot() {
           const updated = await adjustUserBalance(targetUserId, amount, 'wallet_balance');
 
           if (amount > 0) {
-            sendNotificationToUser(targetUserId, 
-`🎉 *Withdrawable Balance Credited!* 💸\n\n` +
-`Admin @${AUTHORIZED_ADMIN_USERNAME} has credited your Withdrawable Balance with:\n` +
-`• 💵 *Amount:* +$${amount.toFixed(2)} USDT\n` +
+            await sendNotificationToUser(targetUserId, 
+`🎉 *Withdrawable Balance Credited!* 💸\n` +
+`────────────────────────\n` +
+`• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
 `• 💰 *New Withdrawable Balance:* $${Number(updated.wallet_balance).toFixed(4)} USDT\n\n` +
 `You can withdraw this amount or hold it in your account!`
             );
           }
 
+          const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+          const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+
           const confirmText =
 `✅ *WALLET BALANCE ADJUSTED!* ✅\n` +
 `────────────────────────\n` +
-`• 👤 *User:* ${updated.first_name || ''} (@${updated.username || 'N/A'})\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
 `• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
 `• 💸 *Adjustment:* \`${amount >= 0 ? '+' : ''}$${amount.toFixed(2)} USDT\`\n` +
 `• 💵 *New Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n` +
 `• 📥 *Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\``;
 
-          return bot.sendMessage(chatId, confirmText, {
+          return safeSendMessage(chatId, confirmText, {
             parse_mode: 'Markdown',
             reply_markup: getUserActionButtons(targetUserId)
           });
         } catch (err) {
-          return bot.sendMessage(chatId, '❌ Failed to adjust wallet balance: ' + err.message);
+          return safeSendMessage(chatId, '❌ Failed to adjust wallet balance: ' + err.message);
         }
       }
     });
@@ -1373,12 +1650,15 @@ function initAdminBot() {
         const targetUserId = data.replace('gift_plan_', '');
         try {
           const user = await getUserFullDetails(targetUserId);
-          if (!user) return bot.sendMessage(chatId, '❌ User not found.');
+          if (!user) return safeSendMessage(chatId, '❌ User not found.');
+
+          const fullName = escapeMd(`${user.first_name || ''} ${user.last_name || ''}`.trim()) || 'N/A';
+          const username = user.username ? `@${escapeMd(user.username)}` : 'N/A';
 
           const text = 
 `🎁 *GIFT MINING POWER PLAN TO USER* 🎁\n` +
 `────────────────────────\n` +
-`• 👤 *User:* ${user.first_name || ''} (@${user.username || 'N/A'})\n` +
+`• 👤 *User:* ${fullName} (${username})\n` +
 `• 🆔 *Telegram ID:* \`${user.telegram_id}\`\n` +
 `• ⚡ *Current Daily Rate:* \`${Number(user.daily_mining_rate).toFixed(4)} USDT/day\`\n` +
 `• 🚀 *Current Hashrate:* \`${Number(user.hashrate).toFixed(2)} GH/s\`\n\n` +
@@ -1407,16 +1687,16 @@ function initAdminBot() {
             ]
           };
 
-          await bot.editMessageText(text, {
+          await safeEditMessageText(text, {
             chat_id: chatId,
             message_id: query.message.message_id,
             parse_mode: 'Markdown',
             reply_markup: buttons
           }).catch(async () => {
-            await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: buttons });
+            await safeSendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: buttons });
           });
         } catch (err) {
-          bot.sendMessage(chatId, '❌ Error: ' + err.message);
+          safeSendMessage(chatId, '❌ Error: ' + err.message);
         }
       }
 
@@ -1428,41 +1708,58 @@ function initAdminBot() {
         const planId = payload.substring(underscoreIdx + 1);
 
         const plan = DEPOSIT_MINING_PLANS.find(p => p.id === planId);
-        if (!plan) return bot.sendMessage(chatId, '❌ Mining Plan not found.');
+        if (!plan) return safeSendMessage(chatId, '❌ Mining Plan not found.');
 
         try {
+          const adminActor = (from.username ? `@${from.username}` : from.first_name) || 'Admin';
           const updated = await giftMiningPlanToUser({
             telegramId: targetUserId,
             planId: plan.id,
             planName: plan.name,
             dailyProfit: plan.dailyProfit,
             hashrateBonus: plan.hashrate,
-            adminUsername: AUTHORIZED_ADMIN_USERNAME
+            adminUsername: adminActor
           });
 
           // Send surprise notification to user via Main Bot
           const userAlert =
-`🎁 *SPECIAL GIFT FROM ADMIN!* 🎁\n\n` +
-`Congratulations! Admin @${AUTHORIZED_ADMIN_USERNAME} has gifted you a free mining package:\n` +
-`• 📦 *Plan:* ${plan.name} ($${plan.price}.00 value)\n` +
+`🎁 *SPECIAL GIFT FROM ADMIN!* 🎁\n` +
+`────────────────────────\n` +
+`Congratulations! You have received a free mining plan gift from Admin:\n` +
+`• 📦 *Gifted Plan:* ${plan.name} ($${plan.price}.00 USDT value)\n` +
 `• ⚡ *Daily Profit Boost:* +$${plan.dailyProfit} USDT/day\n` +
 `• 🚀 *Hashrate Boost:* +${plan.hashrateDisplay}\n\n` +
-`Your mining speed has been upgraded permanently! Happy Mining 🚀`;
+`Your mining speed and daily earnings have been upgraded permanently! Happy Mining 🚀`;
 
-          sendNotificationToUser(targetUserId, userAlert);
+          await sendNotificationToUser(targetUserId, userAlert, {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: '🚀 Open Mining App',
+                    web_app: { url: process.env.WEBAPP_URL || 'https://your-domain.com' }
+                  }
+                ]
+              ]
+            }
+          });
+
+          const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+          const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+          const activePlansCount = Array.isArray(updated.purchased_plans) ? updated.purchased_plans.length : 0;
 
           const successMsg =
 `✅ *MINING PLAN GIFTED SUCCESSFULLY!* ✅\n` +
 `────────────────────────\n` +
-`• 👤 *User:* ${updated.first_name || ''} (@${updated.username || 'N/A'})\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
 `• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
-`• 🎁 *Gifted Plan:* ${plan.name} ($${plan.price}.00 value)\n` +
+`• 🎁 *Gifted Plan:* ${escapeMd(plan.name)} ($${plan.price}.00 value)\n` +
 `• ⚡ *New Daily Rate:* \`${Number(updated.daily_mining_rate).toFixed(4)} USDT/day\`\n` +
 `• 🚀 *New Hashrate:* \`${Number(updated.hashrate).toFixed(2)} GH/s\`\n` +
-`• 📦 *Active Plans:* ${(updated.purchased_plans || []).length}\n\n` +
-`_The user has been notified instantly via the main bot._`;
+`• 📦 *Active Plans:* ${activePlansCount}\n\n` +
+`_The user has received an SMS notification via the main bot._`;
 
-          await bot.editMessageText(successMsg, {
+          await safeEditMessageText(successMsg, {
             chat_id: chatId,
             message_id: query.message.message_id,
             parse_mode: 'Markdown',
@@ -1478,10 +1775,10 @@ function initAdminBot() {
               ]
             }
           }).catch(async () => {
-            await bot.sendMessage(chatId, successMsg, { parse_mode: 'Markdown' });
+            await safeSendMessage(chatId, successMsg, { parse_mode: 'Markdown' });
           });
         } catch (err) {
-          bot.sendMessage(chatId, '❌ Failed to gift plan: ' + err.message);
+          safeSendMessage(chatId, '❌ Failed to gift plan: ' + err.message);
         }
       }
 
@@ -1492,19 +1789,97 @@ function initAdminBot() {
           step: 'awaiting_deposit_amount',
           targetUserId
         };
-        return bot.sendMessage(chatId,
-`💰 *ADD / ADJUST DEPOSIT BALANCE* 💰\n` +
+
+        const buttons = {
+          inline_keyboard: [
+            [
+              { text: '+$1', callback_data: `quick_dep_${targetUserId}_1` },
+              { text: '+$3', callback_data: `quick_dep_${targetUserId}_3` },
+              { text: '+$5', callback_data: `quick_dep_${targetUserId}_5` }
+            ],
+            [
+              { text: '+$10', callback_data: `quick_dep_${targetUserId}_10` },
+              { text: '+$20', callback_data: `quick_dep_${targetUserId}_20` },
+              { text: '+$50', callback_data: `quick_dep_${targetUserId}_50` }
+            ],
+            [
+              { text: '+$100', callback_data: `quick_dep_${targetUserId}_100` },
+              { text: '+$200', callback_data: `quick_dep_${targetUserId}_200` },
+              { text: '+$500', callback_data: `quick_dep_${targetUserId}_500` }
+            ],
+            [
+              { text: '👤 Back to Profile', callback_data: `view_user_${targetUserId}` }
+            ]
+          ]
+        };
+
+        return safeSendMessage(chatId,
+`💰 *ADD / CREDIT DEPOSIT BALANCE* 💰\n` +
 `────────────────────────\n` +
-`👤 *Target User ID:* \`${targetUserId}\`\n\n` +
-`Please reply with the amount of USDT to add or subtract to their Deposit Balance:\n` +
-`• Send \`10\` or \`50.00\` to credit (add)\n` +
-`• Send \`-10\` to debit (subtract)\n\n` +
-`_Type /cancel to abort._`, {
+`• 🆔 *Target User ID:* \`${targetUserId}\`\n\n` +
+`👉 *Just reply with any amount* (e.g. \`5\`, \`10\`, \`25\`, \`50\`, \`100\`) to credit immediately!\n` +
+`Or tap a quick preset amount button below:\n\n` +
+`_The user will receive an instant credit SMS notification in their bot!_`, {
           parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[{ text: '🚫 Cancel', callback_data: `view_user_${targetUserId}` }]]
-          }
+          reply_markup: buttons
         });
+      }
+
+      // Quick Deposit Callback (`quick_dep_<id>_<amount>`)
+      if (data.startsWith('quick_dep_')) {
+        const parts = data.replace('quick_dep_', '').split('_');
+        const targetUserId = parts[0];
+        const amount = parseFloat(parts[1]);
+
+        if (isNaN(amount) || amount <= 0) {
+          return safeSendMessage(chatId, '❌ Invalid amount.');
+        }
+
+        try {
+          delete adminState[chatId];
+          const updated = await adjustUserBalance(targetUserId, amount, 'deposit_balance');
+
+          // Notify user bot
+          await sendNotificationToUser(targetUserId,
+`📥 *Deposit Balance Credited!* 💳\n` +
+`────────────────────────\n` +
+`• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
+`• 💰 *New Deposit Balance:* $${Number(updated.deposit_balance).toFixed(2)} USDT\n\n` +
+`Your deposit balance has been credited to your account! You can now use this balance to activate or upgrade your Mining Plans 🚀`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: '🚀 Open App & Activate Plan',
+                      web_app: { url: process.env.WEBAPP_URL || 'https://your-domain.com' }
+                    }
+                  ]
+                ]
+              }
+            }
+          );
+
+          const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+          const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+
+          const confirmText =
+`✅ *DEPOSIT BALANCE CREDITED!* ✅\n` +
+`────────────────────────\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
+`• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
+`• 💳 *Amount Added:* \`+$${amount.toFixed(2)} USDT\`\n` +
+`• 📥 *New Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n` +
+`• 💵 *Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n\n` +
+`_The user has received an SMS notification about the deposit._`;
+
+          return safeSendMessage(chatId, confirmText, {
+            parse_mode: 'Markdown',
+            reply_markup: getUserActionButtons(targetUserId)
+          });
+        } catch (err) {
+          return safeSendMessage(chatId, '❌ Failed to credit deposit: ' + err.message);
+        }
       }
 
       // Prompt Add Wallet Balance (`add_wal_prompt_<id>`)
@@ -1514,19 +1889,80 @@ function initAdminBot() {
           step: 'awaiting_wallet_amount',
           targetUserId
         };
-        return bot.sendMessage(chatId,
+
+        const buttons = {
+          inline_keyboard: [
+            [
+              { text: '+$1', callback_data: `quick_wal_${targetUserId}_1` },
+              { text: '+$5', callback_data: `quick_wal_${targetUserId}_5` },
+              { text: '+$10', callback_data: `quick_wal_${targetUserId}_10` }
+            ],
+            [
+              { text: '+$20', callback_data: `quick_wal_${targetUserId}_20` },
+              { text: '+$50', callback_data: `quick_wal_${targetUserId}_50` },
+              { text: '+$100', callback_data: `quick_wal_${targetUserId}_100` }
+            ],
+            [
+              { text: '👤 Back to Profile', callback_data: `view_user_${targetUserId}` }
+            ]
+          ]
+        };
+
+        return safeSendMessage(chatId,
 `💵 *ADD / ADJUST WITHDRAWABLE WALLET BALANCE* 💵\n` +
 `────────────────────────\n` +
-`👤 *Target User ID:* \`${targetUserId}\`\n\n` +
-`Please reply with the amount of USDT to add or subtract to their main withdrawable wallet:\n` +
-`• Send \`5\` or \`100.00\` to credit (add)\n` +
-`• Send \`-5\` to debit (subtract)\n\n` +
-`_Type /cancel to abort._`, {
+`• 🆔 *Target User ID:* \`${targetUserId}\`\n\n` +
+`👉 *Just reply with any amount* (e.g. \`5\`, \`10\`, \`50\`) to credit immediately!\n` +
+`Or tap a quick preset amount button below:\n\n` +
+`_The user will be notified instantly via their bot._`, {
           parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[{ text: '🚫 Cancel', callback_data: `view_user_${targetUserId}` }]]
-          }
+          reply_markup: buttons
         });
+      }
+
+      // Quick Wallet Callback (`quick_wal_<id>_<amount>`)
+      if (data.startsWith('quick_wal_')) {
+        const parts = data.replace('quick_wal_', '').split('_');
+        const targetUserId = parts[0];
+        const amount = parseFloat(parts[1]);
+
+        if (isNaN(amount) || amount <= 0) {
+          return safeSendMessage(chatId, '❌ Invalid amount.');
+        }
+
+        try {
+          delete adminState[chatId];
+          const updated = await adjustUserBalance(targetUserId, amount, 'wallet_balance');
+
+          // Notify user bot
+          await sendNotificationToUser(targetUserId,
+`🎉 *Withdrawable Balance Credited!* 💸\n` +
+`────────────────────────\n` +
+`• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
+`• 💰 *New Withdrawable Balance:* $${Number(updated.wallet_balance).toFixed(4)} USDT\n\n` +
+`You can withdraw this amount or hold it in your account!`
+          );
+
+          const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+          const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+
+          const confirmText =
+`✅ *WALLET BALANCE CREDITED!* ✅\n` +
+`────────────────────────\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
+`• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
+`• 💸 *Amount Added:* \`+$${amount.toFixed(2)} USDT\`\n` +
+`• 💵 *New Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n` +
+`• 📥 *Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n\n` +
+`_The user has been notified instantly via the main bot._`;
+
+          return safeSendMessage(chatId, confirmText, {
+            parse_mode: 'Markdown',
+            reply_markup: getUserActionButtons(targetUserId)
+          });
+        } catch (err) {
+          return safeSendMessage(chatId, '❌ Failed to credit wallet: ' + err.message);
+        }
       }
 
       // 13. View User Transaction History (`user_tx_<id>`)
@@ -1604,9 +2040,13 @@ function initAdminBot() {
 
 // Push notification: When any user requests a withdrawal (100% English)
 async function notifyAdminNewWithdrawal(withdrawalData) {
-  if (!adminBotInstance || !savedAdminChatId) {
-    return;
+  if (!adminBotInstance) return;
+
+  const adminChatIds = loadAdminChatIds();
+  if (adminChatIds.length === 0 && savedAdminChatId) {
+    adminChatIds.push(savedAdminChatId);
   }
+  if (adminChatIds.length === 0) return;
 
   try {
     const grossAmount = Number(withdrawalData.amount || 0);
@@ -1651,15 +2091,17 @@ async function notifyAdminNewWithdrawal(withdrawalData) {
       ]
     };
 
-    await adminBotInstance.sendMessage(savedAdminChatId, text, {
-      parse_mode: 'Markdown',
-      reply_markup: buttons
-    }).catch(async (err) => {
-      console.warn('Fallback sending withdrawal alert:', err.message);
-      await adminBotInstance.sendMessage(savedAdminChatId, text.replace(/[*_`\[\]]/g, ''), {
+    for (const cid of adminChatIds) {
+      await adminBotInstance.sendMessage(cid, text, {
+        parse_mode: 'Markdown',
         reply_markup: buttons
+      }).catch(async (err) => {
+        console.warn(`Fallback sending withdrawal alert to ${cid}:`, err.message);
+        await adminBotInstance.sendMessage(cid, text.replace(/[*_`\[\]]/g, ''), {
+          reply_markup: buttons
+        }).catch(() => {});
       });
-    });
+    }
   } catch (err) {
     console.error('Error sending withdrawal alert to admin bot:', err.message);
   }
@@ -1667,9 +2109,13 @@ async function notifyAdminNewWithdrawal(withdrawalData) {
 
 // Push notification: When any user verifies a deposit (100% English)
 async function notifyAdminNewDeposit(depositData) {
-  if (!adminBotInstance || !savedAdminChatId) {
-    return;
+  if (!adminBotInstance) return;
+
+  const adminChatIds = loadAdminChatIds();
+  if (adminChatIds.length === 0 && savedAdminChatId) {
+    adminChatIds.push(savedAdminChatId);
   }
+  if (adminChatIds.length === 0) return;
 
   try {
     const escapeMdStr = (str) => String(str ?? '').replace(/[_*`\[\]]/g, '\\$&');
@@ -1699,15 +2145,17 @@ async function notifyAdminNewDeposit(depositData) {
       ]
     };
 
-    await adminBotInstance.sendMessage(savedAdminChatId, text, {
-      parse_mode: 'Markdown',
-      reply_markup: buttons
-    }).catch(async (err) => {
-      console.warn('Fallback sending deposit alert:', err.message);
-      await adminBotInstance.sendMessage(savedAdminChatId, text.replace(/[*_`\[\]]/g, ''), {
+    for (const cid of adminChatIds) {
+      await adminBotInstance.sendMessage(cid, text, {
+        parse_mode: 'Markdown',
         reply_markup: buttons
+      }).catch(async (err) => {
+        console.warn(`Fallback sending deposit alert to ${cid}:`, err.message);
+        await adminBotInstance.sendMessage(cid, text.replace(/[*_`\[\]]/g, ''), {
+          reply_markup: buttons
+        }).catch(() => {});
       });
-    });
+    }
   } catch (err) {
     console.error('Error sending deposit alert to admin bot:', err.message);
   }

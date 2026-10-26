@@ -365,10 +365,18 @@ async function recordPlanPurchase({ telegramId, planId, planName, planPrice, dai
     throw new Error('ডিপোজিট ব্যালেন্স অপ্রতুল! দয়া করে ডিপোজিট করুন। (Insufficient Deposit Balance)');
   }
 
-  const currentPlans = Array.isArray(user.purchased_plans) ? user.purchased_plans : [];
-  if (!currentPlans.includes(planId)) {
-    currentPlans.push(planId);
+  let currentPlans = [];
+  if (Array.isArray(user.purchased_plans)) {
+    currentPlans = [...user.purchased_plans];
+  } else if (typeof user.purchased_plans === 'string') {
+    try {
+      currentPlans = JSON.parse(user.purchased_plans);
+      if (!Array.isArray(currentPlans)) currentPlans = [];
+    } catch (e) {
+      currentPlans = [];
+    }
   }
+  currentPlans.push(planId);
 
   const newDaily = Number((Number(user.daily_mining_rate) + Number(dailyProfit)).toFixed(4));
   const newHash = Number((Number(user.hashrate) + Number(hashrateBonus)).toFixed(2));
@@ -376,7 +384,7 @@ async function recordPlanPurchase({ telegramId, planId, planName, planPrice, dai
   const updateRes = await pool.query(
     `UPDATE users 
      SET deposit_balance = deposit_balance - $1,
-         purchased_plans = $2,
+         purchased_plans = $2::jsonb,
          daily_mining_rate = $3,
          hashrate = $4,
          updated_at = NOW()
@@ -715,17 +723,26 @@ async function giftMiningPlanToUser({ telegramId, planId, planName, dailyProfit,
   if (userRes.rows.length === 0) throw new Error('User not found in database');
 
   const user = userRes.rows[0];
-  const currentPlans = Array.isArray(user.purchased_plans) ? user.purchased_plans : [];
-  if (!currentPlans.includes(planId)) {
-    currentPlans.push(planId);
+  let currentPlans = [];
+  if (Array.isArray(user.purchased_plans)) {
+    currentPlans = [...user.purchased_plans];
+  } else if (typeof user.purchased_plans === 'string') {
+    try {
+      currentPlans = JSON.parse(user.purchased_plans);
+      if (!Array.isArray(currentPlans)) currentPlans = [];
+    } catch (e) {
+      currentPlans = [];
+    }
   }
 
-  const newDaily = Number((Number(user.daily_mining_rate) + Number(dailyProfit)).toFixed(4));
-  const newHash = Number((Number(user.hashrate) + Number(hashrateBonus)).toFixed(2));
+  currentPlans.push(planId);
+
+  const newDaily = Number((Number(user.daily_mining_rate || 0) + Number(dailyProfit || 0)).toFixed(4));
+  const newHash = Number((Number(user.hashrate || 0) + Number(hashrateBonus || 0)).toFixed(2));
 
   const updateRes = await pool.query(
     `UPDATE users 
-     SET purchased_plans = $1,
+     SET purchased_plans = $1::jsonb,
          daily_mining_rate = $2,
          hashrate = $3,
          updated_at = NOW()
