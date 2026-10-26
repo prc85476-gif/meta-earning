@@ -294,10 +294,10 @@ app.post('/api/withdraw', async (req, res) => {
     const actualUserId = (userId || '987654321').toString();
     const numAmount = parseFloat(amount);
 
-    if (isNaN(numAmount) || numAmount < 5.0) {
+    if (isNaN(numAmount) || numAmount < 0.1) {
       return res.status(400).json({
         success: false,
-        message: 'সর্বনিম্ন উইথড্র ৫.০০ USDT! (Minimum withdrawal is 5.00 USDT)'
+        message: 'সর্বনিম্ন উইথড্র ০.১০ USDT! (Minimum withdrawal is 0.10 USDT)'
       });
     }
 

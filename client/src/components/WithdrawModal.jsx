@@ -25,8 +25,8 @@ export const WithdrawModal = ({
   const [isPendingSuccess, setIsPendingSuccess] = useState(false);
   const [submittedData, setSubmittedData] = useState(null);
 
-  const NETWORK_FEE = 1.0; // 1 USDT fee
-  const MIN_WITHDRAW = 5.0; // 5 USDT minimum
+  const NETWORK_FEE = 0.0; // 0 USDT fee
+  const MIN_WITHDRAW = 0.1; // 0.1 USDT minimum
 
   useEffect(() => {
     const dialog = dialogRef.current;

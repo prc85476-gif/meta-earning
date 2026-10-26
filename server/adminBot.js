@@ -92,6 +92,44 @@ function initAdminBot() {
       return username === AUTHORIZED_ADMIN_USERNAME;
     };
 
+    // Helper: Safe Markdown escaper for legacy Telegram Markdown mode
+    const escapeMd = (str) => {
+      if (str === null || str === undefined) return '';
+      return String(str).replace(/[_*`\[\]]/g, '\\$&');
+    };
+
+    // Helper: Safe sendMessage with automatic non-markdown fallback on entity parse error
+    const safeSendMessage = async (chatId, text, options = {}) => {
+      try {
+        return await bot.sendMessage(chatId, text, options);
+      } catch (err) {
+        if (options && options.parse_mode) {
+          console.warn('safeSendMessage fallback triggered:', err.message);
+          const fallbackOptions = { ...options };
+          delete fallbackOptions.parse_mode;
+          const plainText = String(text).replace(/[*_`\[\]]/g, '');
+          return await bot.sendMessage(chatId, plainText, fallbackOptions);
+        }
+        throw err;
+      }
+    };
+
+    // Helper: Safe editMessageText with automatic non-markdown fallback on entity parse error
+    const safeEditMessageText = async (text, options = {}) => {
+      try {
+        return await bot.editMessageText(text, options);
+      } catch (err) {
+        if (options && options.parse_mode) {
+          console.warn('safeEditMessageText fallback triggered:', err.message);
+          const fallbackOptions = { ...options };
+          delete fallbackOptions.parse_mode;
+          const plainText = String(text).replace(/[*_`\[\]]/g, '');
+          return await bot.editMessageText(plainText, fallbackOptions);
+        }
+        throw err;
+      }
+    };
+
     // Helper: Build Main Admin Dashboard
     const sendAdminDashboard = async (chatId, messageId = null) => {
       try {
@@ -241,32 +279,38 @@ function initAdminBot() {
       if (plansList.length > 0) {
         plansDisplay = plansList.map(pid => {
           const found = DEPOSIT_MINING_PLANS.find(p => p.id === pid);
-          return found ? `• ${found.name} ($${found.price} | +${found.dailyProfit}/d)` : `• ${pid}`;
+          return found ? `• ${escapeMd(found.name)} ($${found.price} | +${found.dailyProfit}/d)` : `• ${escapeMd(pid)}`;
         }).join('\n');
       }
+
+      const rawFullName = `${target.first_name || ''} ${target.last_name || ''}`.trim();
+      const fullName = escapeMd(rawFullName) || 'N/A';
+      const username = target.username ? `@${escapeMd(target.username)}` : 'N/A';
+      const refBy = target.referred_by ? escapeMd(target.referred_by) : 'Direct / None';
+      const address = target.withdraw_address ? String(target.withdraw_address).replace(/[`\\]/g, '') : 'Not Set / Locked Yet';
 
       return (
 `👤 *USER PROFILE & MINING DETAILS* 👤\n` +
 `────────────────────────\n` +
-`• 👤 *Full Name:* ${target.first_name || ''} ${target.last_name || ''}\n` +
-`• 📱 *Username:* @${target.username || 'N/A'}\n` +
+`• 👤 *Full Name:* ${fullName}\n` +
+`• 📱 *Username:* ${username}\n` +
 `• 🆔 *Telegram ID:* \`${target.telegram_id}\`\n\n` +
 `💰 *Account Balances:*\n` +
-`• 💵 *Withdrawable Balance:* \`$${Number(target.wallet_balance).toFixed(4)} USDT\`\n` +
-`• 📥 *Deposit Balance:* \`$${Number(target.deposit_balance).toFixed(2)} USDT\`\n` +
-`• 💳 *Total Deposited All-Time:* \`$${Number(target.total_deposit).toFixed(2)} USDT\`\n` +
-`• 💸 *Total Withdrawn All-Time:* \`$${Number(target.total_withdraw).toFixed(2)} USDT\`\n\n` +
+`• 💵 *Withdrawable Balance:* \`$${Number(target.wallet_balance || 0).toFixed(4)} USDT\`\n` +
+`• 📥 *Deposit Balance:* \`$${Number(target.deposit_balance || 0).toFixed(2)} USDT\`\n` +
+`• 💳 *Total Deposited All-Time:* \`$${Number(target.total_deposit || 0).toFixed(2)} USDT\`\n` +
+`• 💸 *Total Withdrawn All-Time:* \`$${Number(target.total_withdraw || 0).toFixed(2)} USDT\`\n\n` +
 `⚡ *Mining Power & Active Plans:*\n` +
-`• ⚡ *Daily Mining Rate:* \`${Number(target.daily_mining_rate).toFixed(4)} USDT/day\`\n` +
-`• 🚀 *Current Hashrate:* \`${Number(target.hashrate).toFixed(2)} GH/s\`\n` +
+`• ⚡ *Daily Mining Rate:* \`${Number(target.daily_mining_rate || 0).toFixed(4)} USDT/day\`\n` +
+`• 🚀 *Current Hashrate:* \`${Number(target.hashrate || 0).toFixed(2)} GH/s\`\n` +
 `• 📦 *Active Plans (${plansList.length}):*\n${plansDisplay}\n\n` +
 `🔒 *Locked BEP20 Address:*\n` +
-`\`${target.withdraw_address || 'Not Set / Locked Yet'}\`\n\n` +
+`\`${address}\`\n\n` +
 `👥 *Referral Statistics:*\n` +
 `• 👥 *Total Referrals:* \`${target.total_referrals || 0}\`\n` +
-`• 🎁 *Referral Bonus Earned:* \`$${Number(target.total_referral_bonus).toFixed(2)} USDT\`\n` +
-`• 🔗 *Invited By:* \`${target.referred_by || 'Direct / None'}\`\n` +
-`📅 *Registered:* ${new Date(target.created_at).toLocaleString()}`
+`• 🎁 *Referral Bonus Earned:* \`$${Number(target.total_referral_bonus || 0).toFixed(2)} USDT\`\n` +
+`• 🔗 *Invited By:* \`${refBy}\`\n` +
+`📅 *Registered:* ${target.created_at ? new Date(target.created_at).toLocaleString() : 'N/A'}`
       );
     };
 
@@ -348,7 +392,7 @@ function initAdminBot() {
       try {
         const results = await searchUser(query);
         if (results.length === 0) {
-          return bot.sendMessage(chatId, `❌ No user found matching: \`${query}\``, {
+          return safeSendMessage(chatId, `❌ No user found matching: \`${escapeMd(query)}\``, {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [[{ text: '🔙 Back to Dashboard', callback_data: 'admin_refresh' }]]
@@ -358,7 +402,7 @@ function initAdminBot() {
 
         for (const user of results) {
           const profile = renderUserProfile(user);
-          await bot.sendMessage(chatId, profile, {
+          await safeSendMessage(chatId, profile, {
             parse_mode: 'Markdown',
             reply_markup: getUserActionButtons(user.telegram_id)
           });
@@ -643,7 +687,7 @@ function initAdminBot() {
         try {
           const results = await searchUser(query);
           if (results.length === 0) {
-            return bot.sendMessage(chatId, `❌ No user found matching: \`${query}\``, {
+            return safeSendMessage(chatId, `❌ No user found matching: \`${escapeMd(query)}\``, {
               parse_mode: 'Markdown',
               reply_markup: {
                 inline_keyboard: [
@@ -656,7 +700,7 @@ function initAdminBot() {
 
           for (const user of results) {
             const profile = renderUserProfile(user);
-            await bot.sendMessage(chatId, profile, {
+            await safeSendMessage(chatId, profile, {
               parse_mode: 'Markdown',
               reply_markup: getUserActionButtons(user.telegram_id)
             });
@@ -1003,14 +1047,16 @@ function initAdminBot() {
 
           let text = `👥 *LATEST 10 REGISTERED USERS* 👥\n\n`;
           usersRes.rows.forEach((u, i) => {
-            text += `*${i + 1}. ${u.first_name || 'User'}* (@${u.username || 'N/A'})\n`;
+            const uName = escapeMd(u.first_name || 'User');
+            const uHandle = u.username ? `@${escapeMd(u.username)}` : 'N/A';
+            text += `*${i + 1}. ${uName}* (${uHandle})\n`;
             text += `   • ID: \`${u.telegram_id}\`\n`;
             text += `   • Balances: $${Number(u.wallet_balance).toFixed(2)} Wallet | $${Number(u.deposit_balance).toFixed(2)} Deposit\n`;
             text += `   • Deposited: $${Number(u.total_deposit).toFixed(2)} | Withdrawn: $${Number(u.total_withdraw).toFixed(2)}\n`;
             text += `   • Referrals: \`${u.total_referrals || 0}\`\n\n`;
           });
 
-          await bot.sendMessage(chatId, text, {
+          await safeSendMessage(chatId, text, {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [
@@ -1041,14 +1087,16 @@ function initAdminBot() {
           let text = `🏆 *TOP 10 REFERRERS LEADERBOARD* 🏆\n\n`;
           topList.forEach((r, idx) => {
             const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '•';
-            text += `${medal} *#${idx + 1} ${r.first_name || 'User'}* (@${r.username || 'N/A'})\n`;
+            const rName = escapeMd(r.first_name || 'User');
+            const rHandle = r.username ? `@${escapeMd(r.username)}` : 'N/A';
+            text += `${medal} *#${idx + 1} ${rName}* (${rHandle})\n`;
             text += `   • ID: \`${r.telegram_id}\`\n`;
             text += `   • Total Referrals: \`${r.total_referrals} miners\`\n`;
             text += `   • Commissions Earned: \`$${Number(r.total_referral_bonus).toFixed(2)} USDT\`\n`;
             text += `   • Mining Speed: \`${Number(r.hashrate).toFixed(2)} GH/s\`\n\n`;
           });
 
-          await bot.sendMessage(chatId, text, {
+          await safeSendMessage(chatId, text, {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [[{ text: '🔙 Back to Dashboard', callback_data: 'admin_refresh' }]]
@@ -1074,14 +1122,16 @@ function initAdminBot() {
           let text = `💎 *TOP 10 INVESTORS LEADERBOARD* 💎\n\n`;
           topInvestors.forEach((inv, idx) => {
             const medal = idx === 0 ? '👑' : idx === 1 ? '⭐' : idx === 2 ? '✨' : '•';
-            text += `${medal} *#${idx + 1} ${inv.first_name || 'Investor'}* (@${inv.username || 'N/A'})\n`;
+            const invName = escapeMd(inv.first_name || 'Investor');
+            const invHandle = inv.username ? `@${escapeMd(inv.username)}` : 'N/A';
+            text += `${medal} *#${idx + 1} ${invName}* (${invHandle})\n`;
             text += `   • ID: \`${inv.telegram_id}\`\n`;
             text += `   • Total Deposited: \`$${Number(inv.total_deposit).toFixed(2)} USDT\`\n`;
             text += `   • Active Deposit Balance: \`$${Number(inv.deposit_balance).toFixed(2)} USDT\`\n`;
             text += `   • Total Hashrate: \`${Number(inv.hashrate).toFixed(2)} GH/s\`\n\n`;
           });
 
-          await bot.sendMessage(chatId, text, {
+          await safeSendMessage(chatId, text, {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [[{ text: '🔙 Back to Dashboard', callback_data: 'admin_refresh' }]]
@@ -1140,18 +1190,17 @@ function initAdminBot() {
           }
           const pendingTx = txRes.rows[0];
 
-          // 2. Calculate net amount to send
+          // 2. Calculate net amount to send (full amount, 0% fee)
           const grossAmount = Number(pendingTx.amount);
-          const netAmount = Math.max(0, grossAmount - 1.0);
-          const amountToSend = netAmount > 0 ? netAmount : grossAmount;
+          const amountToSend = grossAmount;
 
           // 3. Notify admin in real time that blockchain transaction is in progress
-          await bot.editMessageText(
+          await safeEditMessageText(
 `⏳ *BROADCASTING PAYOUT ON BSC BLOCKCHAIN...* ⏳\n` +
 `────────────────────────\n` +
 `• 🆔 *Tx ID:* #${pendingTx.id}\n` +
-`• 💸 *Sending Net Payout:* \`$${amountToSend.toFixed(2)} USDT\` (BEP20)\n` +
-`• 🔒 *Destination BEP20:*\n\`${pendingTx.wallet_address}\`\n\n` +
+`• 💸 *Sending Net Payout:* \`$${amountToSend.toFixed(4)} USDT\` (BEP20)\n` +
+`• 🔒 *Destination BEP20:*\n\`${String(pendingTx.wallet_address).replace(/[`\\]/g, '')}\`\n\n` +
 `_Signing and broadcasting on-chain transfer from Hot Wallet. Please wait 5-10 seconds for confirmation..._`,
             {
               chat_id: chatId,
@@ -1174,12 +1223,12 @@ function initAdminBot() {
 `❌ *HOT WALLET PAYOUT FAILED!* ❌\n` +
 `────────────────────────\n` +
 `• 🆔 *Tx ID:* #${pendingTx.id}\n` +
-`• 💸 *Attempted Amount:* \`$${amountToSend.toFixed(2)} USDT\`\n` +
-`• 🔒 *Recipient Address:*\n\`${pendingTx.wallet_address}\`\n` +
-`• ⚠️ *Reason:*\n\`${payoutErr.message}\`\n\n` +
+`• 💸 *Attempted Amount:* \`$${amountToSend.toFixed(4)} USDT\`\n` +
+`• 🔒 *Recipient Address:*\n\`${String(pendingTx.wallet_address).replace(/[`\\]/g, '')}\`\n` +
+`• ⚠️ *Reason:*\n\`${escapeMd(payoutErr.message)}\`\n\n` +
 `💡 *No funds were lost.* The withdrawal request is still *PENDING*. Check Hot Wallet gas (BNB) or USDT balance and click Retry below:`;
 
-            return bot.editMessageText(failureMsg, {
+            return safeEditMessageText(failureMsg, {
               chat_id: chatId,
               message_id: query.message.message_id,
               parse_mode: 'Markdown',
@@ -1196,7 +1245,7 @@ function initAdminBot() {
                 ]
               }
             }).catch(async () => {
-              await bot.sendMessage(chatId, failureMsg, { parse_mode: 'Markdown' });
+              await safeSendMessage(chatId, failureMsg, { parse_mode: 'Markdown' });
             });
           }
 
@@ -1209,20 +1258,22 @@ function initAdminBot() {
           const hotBal = await getHotWalletBalances();
 
           // 7. Edit admin message to show completed payout
+          const uFirstName = escapeMd(user.first_name || 'User');
+          const uUsername = user.username ? `@${escapeMd(user.username)}` : 'N/A';
           const approvedMsg = 
 `✅ *PAYOUT SENT ON-CHAIN VIA HOT WALLET!* ✅\n` +
 `────────────────────────\n` +
 `• 🆔 *Tx ID:* #${transaction.id}\n` +
-`• 👤 *User:* ${user.first_name || ''} (@${user.username || 'N/A'})\n` +
-`• 💸 *Gross Withdrawal:* \`$${Number(transaction.amount).toFixed(2)} USDT\`\n` +
-`• 💵 *Net Sent to User:* \`$${amountToSend.toFixed(2)} USDT\` ($1.00 Network Fee)\n` +
-`• 🔒 *Destination BEP20:*\n\`${transaction.wallet_address}\`\n` +
+`• 👤 *User:* ${uFirstName} (${uUsername})\n` +
+`• 💸 *Gross Withdrawal:* \`$${Number(transaction.amount).toFixed(4)} USDT\`\n` +
+`• 💵 *Net Sent to User:* \`$${amountToSend.toFixed(4)} USDT\`\n` +
+`• 🔒 *Destination BEP20:*\n\`${String(transaction.wallet_address).replace(/[`\\]/g, '')}\`\n` +
 `• 🔗 *BSCscan TxHash:*\n\`${payoutTxHash}\`\n` +
 `• ⛽ *Hot Wallet Remaining:* \`$${hotBal.usdtBalance} USDT\` (${hotBal.bnbBalance} BNB)\n` +
 `• 📅 *Status:* Completed & Confirmed On-Chain ✅\n` +
 `• 👑 *Approved By:* @${AUTHORIZED_ADMIN_USERNAME}`;
 
-          await bot.editMessageText(approvedMsg, {
+          await safeEditMessageText(approvedMsg, {
             chat_id: chatId,
             message_id: query.message.message_id,
             parse_mode: 'Markdown',
@@ -1238,7 +1289,7 @@ function initAdminBot() {
               ]
             }
           }).catch(async () => {
-            await bot.sendMessage(chatId, approvedMsg, { parse_mode: 'Markdown' });
+            await safeSendMessage(chatId, approvedMsg, { parse_mode: 'Markdown' });
           });
 
           // 8. Send confirmation message to the User via Main Bot (@Meta_Farming_bot) with BscScan & Payout channel buttons
@@ -1263,22 +1314,24 @@ function initAdminBot() {
           const { transaction, user } = result;
 
           // Edit admin message to show Rejected
+          const rFirstName = escapeMd(user.first_name || 'User');
+          const rUsername = user.username ? `@${escapeMd(user.username)}` : 'N/A';
           const rejectedMsg = 
 `❌ *WITHDRAWAL REJECTED & REFUNDED!* ❌\n` +
 `────────────────────────\n` +
 `• 🆔 *Tx ID:* #${transaction.id}\n` +
-`• 👤 *User:* ${user.first_name || ''} (@${user.username || 'N/A'})\n` +
-`• 💸 *Amount:* \`$${Number(transaction.amount).toFixed(2)} USDT\`\n` +
-`• ↩️ *Refund:* \`$${Number(transaction.amount).toFixed(2)} USDT\` refunded to user balance.\n` +
+`• 👤 *User:* ${rFirstName} (${rUsername})\n` +
+`• 💸 *Amount:* \`$${Number(transaction.amount).toFixed(4)} USDT\`\n` +
+`• ↩️ *Refund:* \`$${Number(transaction.amount).toFixed(4)} USDT\` refunded to user balance.\n` +
 `• 📅 *Status:* Rejected ❌\n` +
 `• 👑 *Action By:* @${AUTHORIZED_ADMIN_USERNAME}`;
 
-          await bot.editMessageText(rejectedMsg, {
+          await safeEditMessageText(rejectedMsg, {
             chat_id: chatId,
             message_id: query.message.message_id,
             parse_mode: 'Markdown'
           }).catch(async () => {
-            await bot.sendMessage(chatId, rejectedMsg, { parse_mode: 'Markdown' });
+            await safeSendMessage(chatId, rejectedMsg, { parse_mode: 'Markdown' });
           });
 
           // Send rejection notice to user via Main Bot
@@ -1306,7 +1359,7 @@ function initAdminBot() {
           }
 
           const profileText = renderUserProfile(target);
-          await bot.sendMessage(chatId, profileText, {
+          await safeSendMessage(chatId, profileText, {
             parse_mode: 'Markdown',
             reply_markup: getUserActionButtons(target.telegram_id)
           });
@@ -1556,21 +1609,26 @@ async function notifyAdminNewWithdrawal(withdrawalData) {
   }
 
   try {
-    const netAmount = Math.max(0, Number(withdrawalData.amount) - 1.0);
+    const grossAmount = Number(withdrawalData.amount || 0);
     const hotBal = await getHotWalletBalances();
-    const canPay = parseFloat(hotBal.usdtBalance || 0) >= netAmount;
+    const canPay = parseFloat(hotBal.usdtBalance || 0) >= grossAmount;
+
+    const escapeMdStr = (str) => String(str ?? '').replace(/[_*`\[\]]/g, '\\$&');
+    const fullName = escapeMdStr(`${withdrawalData.firstName || ''} ${withdrawalData.lastName || ''}`.trim()) || 'N/A';
+    const username = withdrawalData.username ? `@${escapeMdStr(withdrawalData.username)}` : 'N/A';
+    const address = String(withdrawalData.address || '').replace(/[`\\]/g, '');
 
     const text = 
 `🚨 *NEW WITHDRAWAL REQUEST SUBMITTED!* 🚨\n` +
 `────────────────────────\n` +
 `• 🆔 *Tx ID:* #${withdrawalData.id || 'N/A'}\n` +
-`• 👤 *User:* ${withdrawalData.firstName || ''} ${withdrawalData.lastName || ''} (@${withdrawalData.username || 'N/A'})\n` +
+`• 👤 *User:* ${fullName} (${username})\n` +
 `• 🆔 *Telegram ID:* \`${withdrawalData.telegramId}\`\n` +
-`• 💰 *Current Wallet Balance:* \`$${Number(withdrawalData.walletBalance || 0).toFixed(2)} USDT\`\n` +
+`• 💰 *Current Wallet Balance:* \`$${Number(withdrawalData.walletBalance || 0).toFixed(4)} USDT\`\n` +
 `• 📥 *Deposit Balance:* \`$${Number(withdrawalData.depositBalance || 0).toFixed(2)} USDT\`\n` +
-`• 💸 *Gross Withdrawal:* \`$${Number(withdrawalData.amount).toFixed(2)} USDT\`\n` +
-`• 💵 *Net Payout to Send:* \`$${netAmount.toFixed(2)} USDT\` ($1.00 Network Fee)\n` +
-`• 🔒 *Destination BEP20 Address:*\n\`${withdrawalData.address}\`\n` +
+`• 💸 *Gross Withdrawal:* \`$${grossAmount.toFixed(4)} USDT\`\n` +
+`• 💵 *Net Payout to Send:* \`$${grossAmount.toFixed(4)} USDT\`\n` +
+`• 🔒 *Destination BEP20 Address:*\n\`${address}\`\n` +
 `• 👥 *Total Referrals:* \`${withdrawalData.totalReferrals || 0}\`\n` +
 `• 🔥 *Hot Wallet Balance:* \`$${hotBal.usdtBalance} USDT\` (${hotBal.bnbBalance} BNB)\n` +
 `• ⚡ *Hot Wallet Status:* ${canPay ? '🟢 Ready to Auto-Pay' : '⚠️ Top Up Needed'}\n` +
@@ -1596,6 +1654,11 @@ async function notifyAdminNewWithdrawal(withdrawalData) {
     await adminBotInstance.sendMessage(savedAdminChatId, text, {
       parse_mode: 'Markdown',
       reply_markup: buttons
+    }).catch(async (err) => {
+      console.warn('Fallback sending withdrawal alert:', err.message);
+      await adminBotInstance.sendMessage(savedAdminChatId, text.replace(/[*_`\[\]]/g, ''), {
+        reply_markup: buttons
+      });
     });
   } catch (err) {
     console.error('Error sending withdrawal alert to admin bot:', err.message);
@@ -1609,16 +1672,22 @@ async function notifyAdminNewDeposit(depositData) {
   }
 
   try {
+    const escapeMdStr = (str) => String(str ?? '').replace(/[_*`\[\]]/g, '\\$&');
+    const fullName = escapeMdStr(`${depositData.firstName || ''} ${depositData.lastName || ''}`.trim()) || 'N/A';
+    const username = depositData.username ? `@${escapeMdStr(depositData.username)}` : 'N/A';
+    const refBy = depositData.referredBy ? escapeMdStr(depositData.referredBy) : 'Direct';
+    const txHash = String(depositData.txHash || '').replace(/[`\\]/g, '');
+
     const text = 
 `📥 *NEW DEPOSIT VERIFIED & CREDITED!* 📥\n` +
 `────────────────────────\n` +
-`• 👤 *User:* ${depositData.firstName || ''} ${depositData.lastName || ''} (@${depositData.username || 'N/A'})\n` +
+`• 👤 *User:* ${fullName} (${username})\n` +
 `• 🆔 *Telegram ID:* \`${depositData.telegramId}\`\n` +
 `• 💵 *Deposit Amount:* \`+$${Number(depositData.amount).toFixed(2)} USDT (BEP20)\`\n` +
 `• 💰 *New Deposit Balance:* \`$${Number(depositData.depositBalance || 0).toFixed(2)} USDT\`\n` +
 `• 💳 *Total Deposited All-Time:* \`$${Number(depositData.totalDeposit || 0).toFixed(2)} USDT\`\n` +
-`• 👥 *Referred By:* \`${depositData.referredBy || 'Direct'}\`\n` +
-`• 🔗 *BSCscan Transaction Hash:*\n\`${depositData.txHash}\`\n` +
+`• 👥 *Referred By:* \`${refBy}\`\n` +
+`• 🔗 *BSCscan Transaction Hash:*\n\`${txHash}\`\n` +
 `• 📅 *Date:* ${depositData.date || new Date().toLocaleString()}`;
 
     const buttons = {
@@ -1633,6 +1702,11 @@ async function notifyAdminNewDeposit(depositData) {
     await adminBotInstance.sendMessage(savedAdminChatId, text, {
       parse_mode: 'Markdown',
       reply_markup: buttons
+    }).catch(async (err) => {
+      console.warn('Fallback sending deposit alert:', err.message);
+      await adminBotInstance.sendMessage(savedAdminChatId, text.replace(/[*_`\[\]]/g, ''), {
+        reply_markup: buttons
+      });
     });
   } catch (err) {
     console.error('Error sending deposit alert to admin bot:', err.message);
