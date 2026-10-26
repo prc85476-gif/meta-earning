@@ -97,8 +97,8 @@ export function App() {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          // Clear old mock list if it contains mock IDs or Shohan
-          if (parsed.some(p => p.id === '1' || p.name === 'Shohan Ahmed' || p.id === '2')) {
+          // Clear old mock list or simulated 10$ deposit test data
+          if (parsed.some(p => p.id === '1' || p.name === 'Shohan Ahmed' || p.id === '2' || Number(p.depositAmount) === 10)) {
             localStorage.removeItem('usdt_referral_list');
             return [];
           }
@@ -290,6 +290,7 @@ export function App() {
             hasDeposited: Number(r.deposit_amount || 0) > 0
           }));
           setReferralList(mapped);
+          localStorage.setItem('usdt_referral_list', JSON.stringify(mapped));
         }
 
         // SYNC TRANSACTIONS & ACTIVITIES: Update Pending -> Completed instantly
@@ -737,63 +738,6 @@ export function App() {
     }
   };
 
-  // When a referral user deposits, add 10% instant commission to WITHDRAW BALANCE
-  const handleReferralUserDeposit = (referralId, depositAmount = 10) => {
-    const commission = Number((depositAmount * 0.10).toFixed(2));
-
-    // 1. Credit 10% commission directly to the WITHDRAW BALANCE (walletBalance)
-    setWalletBalance((prev) => {
-      const updated = prev + commission;
-      localStorage.setItem('usdt_wallet_balance', updated.toFixed(6));
-      return updated;
-    });
-
-    // 2. Add to totalReferralBonus
-    setTotalReferralBonus((prev) => {
-      const updated = prev + commission;
-      localStorage.setItem('usdt_total_referral_bonus', updated.toFixed(2));
-      return updated;
-    });
-
-    // 3. Update the referral user in the list
-    setReferralList((prev) => {
-      const updated = prev.map((item) => {
-        if (item.id === referralId) {
-          const newDep = (item.depositAmount || 0) + depositAmount;
-          const newCom = (item.commission || 0) + commission;
-          return {
-            ...item,
-            depositAmount: newDep,
-            commission: newCom,
-            hasDeposited: true
-          };
-        }
-        return item;
-      });
-      localStorage.setItem('usdt_referral_list', JSON.stringify(updated));
-      return updated;
-    });
-
-    // 4. Record transaction in history
-    setTransactions((prev) => [
-      {
-        type: 'referral_bonus',
-        amount: commission,
-        network: 'BEP20',
-        date: `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-        status: 'Completed'
-      },
-      ...prev
-    ]);
-
-    // 5. User feedback
-    triggerHaptic('success');
-    showToast(
-      lang === 'bn'
-        ? `রেফারাল ফ্রেন্ড $${depositAmount} ডিপোজিট করেছে! +${commission.toFixed(2)} USDT (১০%) সরাসরি উইথড্র ব্যালেন্সে যোগ হয়েছে!`
-        : `Referral user deposited $${depositAmount}! +${commission.toFixed(2)} USDT (10%) added to withdraw balance!`
-    );
-  };
 
   // Handle user withdrawal submission (Pending in account history)
   const handleWithdrawSubmit = ({ address, amount, network, netAmount, fee }) => {

@@ -248,12 +248,12 @@ export const FriendsTab = ({
                 </div>
 
                 <div className="ref-friend-right">
-                  <span className={`ref-friend-reward ${friend.commission > 0 ? 'active' : 'zero'}`}>
-                    {friend.commission > 0 ? `+${formatUSDT(friend.commission)} USDT` : '0 USDT'}
+                  <span className={`ref-friend-reward ${Number(friend.commission) > 0 ? 'active' : 'zero'}`}>
+                    {Number(friend.commission) > 0 ? `+${formatUSDT(friend.commission)} USDT` : '0 USDT'}
                   </span>
-                  <span className={`ref-friend-status ${friend.hasDeposited ? 'deposited' : 'pending'}`}>
-                    {friend.hasDeposited 
-                      ? (lang === 'bn' ? `ডিপোজিট: $${friend.depositAmount}` : `Deposited: $${friend.depositAmount}`)
+                  <span className={`ref-friend-status ${friend.hasDeposited && Number(friend.depositAmount) > 0 ? 'deposited' : 'pending'}`}>
+                    {friend.hasDeposited && Number(friend.depositAmount) > 0 
+                      ? (lang === 'bn' ? `ডিপোজিট: $${Number(friend.depositAmount).toFixed(2)}` : `Deposited: $${Number(friend.depositAmount).toFixed(2)}`)
                       : (lang === 'bn' ? 'ডিপোজিট নেই' : 'No Deposit')}
                   </span>
                 </div>

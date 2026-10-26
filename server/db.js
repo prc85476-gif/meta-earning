@@ -281,9 +281,9 @@ async function recordVerifiedDeposit({ telegramId, amount, txHash, network = 'BE
     note: `USDT Deposit verified via ${network}`
   });
 
-  // When a referred user deposits, give flat $0.05 commission to referrer's WITHDRAWABLE balance
+  // When a referred user deposits, give flat $0.10 commission to referrer's WITHDRAWABLE balance
   if (updatedUser && updatedUser.referred_by) {
-    const commission = 0.05; // Fixed $0.05 reward to referrer on deposit
+    const commission = 0.10; // Fixed $0.10 reward to referrer on deposit, no matter the deposit amount
     const referrerId = updatedUser.referred_by;
     await pool.query(
       `UPDATE users
@@ -308,7 +308,7 @@ async function recordVerifiedDeposit({ telegramId, amount, txHash, network = 'BE
       amount: commission,
       network: 'BEP20',
       status: 'Completed',
-      note: `Referral commission from deposit by user ${tid}`
+      note: `Referral commission ($0.10) from deposit by user ${tid}`
     });
   }
 

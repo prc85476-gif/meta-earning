@@ -8,7 +8,9 @@ const {
   notifyUserClaimReady,
   notifyUserMiningStopped,
   notifyReferrerInviteSuccess,
-  notifyUserWithdrawalSubmitted
+  notifyUserWithdrawalSubmitted,
+  notifyUserDepositCredited,
+  notifyReferrerDepositBonus
 } = require('./bot');
 const { initAdminBot, notifyAdminNewWithdrawal, notifyAdminNewDeposit } = require('./adminBot');
 const { verifyBscDeposit } = require('./bscVerification');
@@ -266,6 +268,21 @@ app.post('/api/deposit/verify', async (req, res) => {
       referredBy: updatedUser.referred_by,
       date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
+
+    // Send Instant Bot SMS to Depositor: "Deposit Credited", amount, network, BscScan button
+    notifyUserDepositCredited(actualUserId, {
+      amount: result.amount,
+      network: 'BEP20 (BSC)',
+      txHash: result.txHash
+    });
+
+    // If referred by someone, notify referrer that they received $0.10 referral bonus
+    if (updatedUser && updatedUser.referred_by) {
+      notifyReferrerDepositBonus(updatedUser.referred_by, {
+        bonus: 0.10,
+        depositorName: updatedUser.first_name || updatedUser.username || `User ${actualUserId}`
+      });
+    }
 
     res.json({
       success: true,

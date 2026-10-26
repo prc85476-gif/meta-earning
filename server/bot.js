@@ -165,6 +165,49 @@ function notifyUserWithdrawalApproved(telegramId, { amount, address, payoutTxHas
       ]
     }
   }).catch(err => console.error(`Error sending withdraw approved alert to ${telegramId}:`, err.message));
+// 7. Notify user when deposit is verified and credited (with BscScan button)
+function notifyUserDepositCredited(telegramId, { amount, network = 'BEP20 (BSC)', txHash } = {}) {
+  if (!mainUserBotInstance || !telegramId) return;
+  const bscScanUrl = txHash ? `https://bscscan.com/tx/${txHash}` : 'https://bscscan.com';
+
+  const text =
+`✅ *Deposit Credited!* 💰\n\n` +
+`Your deposit has been verified & credited to your account.\n\n` +
+`💵 *Amount:* \`$${Number(amount).toFixed(2)} USDT\`\n` +
+`🌐 *Network:* \`${network}\`\n` +
+`⚡ *Status:* \`Completed\` ✅`;
+
+  const buttons = {
+    inline_keyboard: [
+      [
+        { text: '🔍 BscScan', url: bscScanUrl }
+      ]
+    ]
+  };
+
+  return mainUserBotInstance.sendMessage(telegramId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: buttons
+  }).catch(() => {
+    return mainUserBotInstance.sendMessage(telegramId,
+`✅ Deposit Credited!\n\nAmount: $${Number(amount).toFixed(2)} USDT\nNetwork: ${network}\nStatus: Completed ✅`, {
+      reply_markup: buttons
+    }).catch(err => console.error(`Error sending deposit credited alert to ${telegramId}:`, err.message));
+  });
+}
+
+// 8. Notify referrer when referred member deposits
+function notifyReferrerDepositBonus(referrerId, { bonus = 0.10, depositorName = 'Your referred user' } = {}) {
+  if (!mainUserBotInstance || !referrerId) return;
+  const text =
+`🎁 *Referral Bonus Credited!* 💸\n\n` +
+`Your referred member (${depositorName}) made a deposit!\n` +
+`💰 *Referral Bonus:* \`+$${Number(bonus).toFixed(2)} USDT\`\n` +
+`Credited directly to your main withdrawable balance.`;
+
+  return mainUserBotInstance.sendMessage(referrerId, text, {
+    parse_mode: 'Markdown'
+  }).catch(err => console.error(`Error sending referral bonus alert to ${referrerId}:`, err.message));
 }
 
 // 6. Post Payment Receipt to Payment Proof Channel (e.g. @Meta_Farming_Payment_Proof)
@@ -556,6 +599,8 @@ module.exports = {
   notifyReferrerInviteSuccess,
   notifyUserWithdrawalSubmitted,
   notifyUserWithdrawalApproved,
+  notifyUserDepositCredited,
+  notifyReferrerDepositBonus,
   postPaymentProofToChannel,
   getMainBotInstance
 };
