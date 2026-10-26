@@ -18,7 +18,7 @@ const {
   giftMiningPlanToUser,
   pool
 } = require('./db');
-const { sendNotificationToUser, sendPhotoToUser, notifyUserWithdrawalApproved } = require('./bot');
+const { sendNotificationToUser, sendPhotoToUser, notifyUserWithdrawalApproved, postPaymentProofToChannel } = require('./bot');
 const {
   getHotWalletAddress,
   getHotWalletBalances,
@@ -742,6 +742,38 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
       const targetAdmin = match[1];
       removeExtraAdmin(targetAdmin);
       safeSendMessage(chatId, `🗑️ Removed extra admin: \`${escapeMd(targetAdmin)}\``, { parse_mode: 'Markdown' });
+    });
+
+    // /testproof [amount] command: Test posting payment receipt to @Meta_Farming_Payment_Proof
+    bot.onText(/\/testproof(?:\s+(\S+))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!isAuthorizedAdmin(msg.from)) return;
+
+      const testAmount = parseFloat(match[1]) || 0.2873;
+      const hotBal = await getHotWalletBalances();
+      const fakeTx = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+
+      try {
+        const proofRes = await postPaymentProofToChannel({
+          amount: testAmount,
+          toAddress: '0xc60e90956b9c97b819f4007da85bfa179929a66b',
+          fromAddress: hotBal.address || '0x7a7a1234567890abcdef1234567890abcdef97ff',
+          payoutTxHash: fakeTx,
+          username: msg.from.username || 'vi88',
+          firstName: msg.from.first_name,
+          telegramId: msg.from.id
+        });
+
+        if (!proofRes.success && adminBotInstance) {
+          await adminBotInstance.sendMessage(proofRes.channelId, proofRes.text, {
+            reply_markup: proofRes.buttons
+          });
+        }
+
+        safeSendMessage(chatId, `✅ Test payment proof successfully posted to \`${process.env.PAYMENT_PROOF_CHANNEL || '@Meta_Farming_Payment_Proof'}\`!\nCheck your channel now.`, { parse_mode: 'Markdown' });
+      } catch (err) {
+        safeSendMessage(chatId, `❌ Failed to send test proof: ${err.message}`);
+      }
     });
 
     // Helper: Start Step 1 of Broadcast Flow
@@ -1576,6 +1608,29 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
             payoutTxHash,
             network: transaction.network || 'BEP20'
           });
+
+          // 9. Post Payment Proof Receipt to Telegram Channel (@Meta_Farming_Payment_Proof)
+          try {
+            const proofRes = await postPaymentProofToChannel({
+              amount: amountToSend,
+              toAddress: transaction.wallet_address,
+              fromAddress: hotBal.address,
+              payoutTxHash,
+              username: user.username,
+              firstName: user.first_name,
+              telegramId: transaction.telegram_id
+            });
+
+            // If main bot couldn't post (e.g. admin bot was given channel admin instead), use admin bot as fallback
+            if (!proofRes.success && adminBotInstance) {
+              await adminBotInstance.sendMessage(proofRes.channelId, proofRes.text, {
+                reply_markup: proofRes.buttons
+              });
+              console.log(`✅ [Payment Proof] Successfully posted to ${proofRes.channelId} via Admin Bot fallback`);
+            }
+          } catch (proofErr) {
+            console.error('[Payment Proof] Failed to post proof to channel:', proofErr.message);
+          }
 
         } catch (err) {
           console.error('Error approving withdrawal:', err);

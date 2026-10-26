@@ -167,6 +167,82 @@ function notifyUserWithdrawalApproved(telegramId, { amount, address, payoutTxHas
   }).catch(err => console.error(`Error sending withdraw approved alert to ${telegramId}:`, err.message));
 }
 
+// 6. Post Payment Receipt to Payment Proof Channel (e.g. @Meta_Farming_Payment_Proof)
+async function postPaymentProofToChannel({ amount, toAddress, fromAddress, payoutTxHash, username, firstName, telegramId } = {}) {
+  const channelId = process.env.PAYMENT_PROOF_CHANNEL || '@Meta_Farming_Payment_Proof';
+  const botUser = botUsername || process.env.BOT_USERNAME || 'Meta_Farming_bot';
+
+  const maskUser = () => {
+    if (username) {
+      const clean = username.replace('@', '').trim();
+      if (clean.length > 4) {
+        return `@${clean.slice(0, 2)}***${clean.slice(-2)}`;
+      } else if (clean.length > 2) {
+        return `@${clean.slice(0, 1)}***${clean.slice(-1)}`;
+      }
+      return `@${clean}***`;
+    }
+    if (firstName) {
+      const clean = firstName.trim();
+      if (clean.length > 3) {
+        return `${clean.slice(0, 2)}***${clean.slice(-1)}`;
+      }
+      return `${clean}***`;
+    }
+    const tid = String(telegramId || '');
+    return tid ? `ID: ${tid.slice(0, 2)}***${tid.slice(-2)}` : '@vi***88';
+  };
+
+  const shorten = (addr) => {
+    if (!addr) return '0x0000...0000';
+    const s = String(addr).trim();
+    if (s.length <= 10) return s;
+    return `${s.slice(0, 6)}...${s.slice(-4)}`;
+  };
+
+  const formattedAmount = Number(amount || 0).toFixed(4);
+
+  const text =
+`💎 META FARMING\n` +
+`━━━━━━━━━━━━━━━━━━━━━━\n` +
+`✦ PAYMENT RECEIPT✦ \n` +
+`👤 Username: ${maskUser()}\n` +
+`📤 Transaction Details\n` +
+`💵 Amount: ${formattedAmount} USDT\n` +
+`📥 From: ${shorten(fromAddress)}\n` +
+`📤 Send To: ${shorten(toAddress)}\n` +
+`🌐 Network: Binance Smart Chain (BEP-20)\n` +
+`━━━━━━━━━━━━━━━━━━━━━━\n` +
+`✅ Status: Funds Available`;
+
+  const buttons = {
+    inline_keyboard: [
+      [
+        { text: 'Official Bot ↗', url: `https://t.me/${botUser}` },
+        { text: 'Bsc Transaction ↗', url: `https://bscscan.com/tx/${payoutTxHash || ''}` }
+      ]
+    ]
+  };
+
+  if (mainUserBotInstance) {
+    try {
+      await mainUserBotInstance.sendMessage(channelId, text, {
+        reply_markup: buttons
+      });
+      console.log(`✅ [Payment Proof] Successfully posted to ${channelId} via Main Bot`);
+      return { success: true, bot: 'main', text, buttons, channelId };
+    } catch (err) {
+      console.warn(`[Payment Proof] Main bot could not post to ${channelId}:`, err.message);
+    }
+  }
+
+  return { success: false, text, buttons, channelId };
+}
+
+function getMainBotInstance() {
+  return mainUserBotInstance;
+}
+
 function initTelegramBot(webappUrl) {
   globalWebappUrl = webappUrl;
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -479,5 +555,7 @@ module.exports = {
   notifyUserMiningStopped,
   notifyReferrerInviteSuccess,
   notifyUserWithdrawalSubmitted,
-  notifyUserWithdrawalApproved
+  notifyUserWithdrawalApproved,
+  postPaymentProofToChannel,
+  getMainBotInstance
 };
