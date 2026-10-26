@@ -682,15 +682,68 @@ async function resetUserWithdrawAddress(telegramId) {
 async function adjustUserBalance(telegramId, amount, type = 'wallet_balance') {
   const num = Number(amount);
   const column = type === 'deposit_balance' ? 'deposit_balance' : 'wallet_balance';
+  const extraDepositUpdate = (type === 'deposit_balance' && num > 0) ? ', total_deposit = total_deposit + $1' : '';
+
   const res = await pool.query(
     `UPDATE users 
-     SET ${column} = GREATEST(0, ${column} + $1),
+     SET ${column} = GREATEST(0, ${column} + $1)${extraDepositUpdate},
          updated_at = NOW() 
      WHERE telegram_id = $2 
      RETURNING *`,
     [num, telegramId.toString()]
   );
+
+  if (res.rows.length === 0) throw new Error('User not found in database');
+
+  // Record audit transaction
+  await addTransaction({
+    telegramId: telegramId.toString(),
+    type: type === 'deposit_balance' ? 'deposit' : 'bonus',
+    amount: Math.abs(num),
+    network: 'Admin Adjustment',
+    status: 'Completed',
+    note: `Admin ${num >= 0 ? 'credited' : 'debited'} $${Math.abs(num).toFixed(2)} USDT to ${type === 'deposit_balance' ? 'Deposit' : 'Wallet'} Balance`
+  });
+
   return res.rows[0];
+}
+
+// Admin Helper: Gift a Mining Plan directly to a user
+async function giftMiningPlanToUser({ telegramId, planId, planName, dailyProfit, hashrateBonus, adminUsername }) {
+  const tid = telegramId.toString();
+  const userRes = await pool.query('SELECT purchased_plans, daily_mining_rate, hashrate FROM users WHERE telegram_id = $1', [tid]);
+  if (userRes.rows.length === 0) throw new Error('User not found in database');
+
+  const user = userRes.rows[0];
+  const currentPlans = Array.isArray(user.purchased_plans) ? user.purchased_plans : [];
+  if (!currentPlans.includes(planId)) {
+    currentPlans.push(planId);
+  }
+
+  const newDaily = Number((Number(user.daily_mining_rate) + Number(dailyProfit)).toFixed(4));
+  const newHash = Number((Number(user.hashrate) + Number(hashrateBonus)).toFixed(2));
+
+  const updateRes = await pool.query(
+    `UPDATE users 
+     SET purchased_plans = $1,
+         daily_mining_rate = $2,
+         hashrate = $3,
+         updated_at = NOW()
+     WHERE telegram_id = $4
+     RETURNING *`,
+    [JSON.stringify(currentPlans), newDaily, newHash, tid]
+  );
+
+  await addTransaction({
+    telegramId: tid,
+    type: 'plan_gift',
+    amount: 0,
+    network: 'Admin Gift',
+    status: 'Completed',
+    note: `Gifted ${planName} by Admin @${adminUsername || 'admin'}`
+  });
+
+  return updateRes.rows[0];
 }
 
 module.exports = {
@@ -719,5 +772,6 @@ module.exports = {
   getUserTransactions,
   getAllUserTelegramIds,
   resetUserWithdrawAddress,
-  adjustUserBalance
+  adjustUserBalance,
+  giftMiningPlanToUser
 };

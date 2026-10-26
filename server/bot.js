@@ -13,7 +13,20 @@ let botUsername = 'Meta_Farming_bot';
 function sendNotificationToUser(telegramId, text, options = {}) {
   if (mainUserBotInstance && telegramId) {
     return mainUserBotInstance.sendMessage(telegramId, text, { parse_mode: 'Markdown', ...options })
-      .catch(err => console.error(`Error sending message to user ${telegramId}:`, err.message));
+      .catch(err => {
+        // Fallback without parse_mode if Markdown parsing failed
+        return mainUserBotInstance.sendMessage(telegramId, text, { ...options });
+      });
+  }
+}
+
+function sendPhotoToUser(telegramId, photo, caption = '', options = {}) {
+  if (mainUserBotInstance && telegramId) {
+    return mainUserBotInstance.sendPhoto(telegramId, photo, { caption, parse_mode: 'Markdown', ...options })
+      .catch(err => {
+        // Fallback without parse_mode if Markdown parsing failed
+        return mainUserBotInstance.sendPhoto(telegramId, photo, { caption, ...options });
+      });
   }
 }
 
@@ -461,6 +474,7 @@ function initTelegramBot(webappUrl) {
 module.exports = {
   initTelegramBot,
   sendNotificationToUser,
+  sendPhotoToUser,
   notifyUserClaimReady,
   notifyUserMiningStopped,
   notifyReferrerInviteSuccess,
