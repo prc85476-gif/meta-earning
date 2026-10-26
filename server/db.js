@@ -35,7 +35,7 @@ async function initDatabase() {
         total_withdraw NUMERIC(18, 2) DEFAULT 0.00,
         withdraw_address VARCHAR(255) DEFAULT NULL,
         is_address_locked BOOLEAN DEFAULT FALSE,
-        daily_mining_rate NUMERIC(18, 4) DEFAULT 0.0290,
+        daily_mining_rate NUMERIC(18, 4) DEFAULT 0.0500,
         hashrate NUMERIC(18, 2) DEFAULT 1.22,
         purchased_plans JSONB DEFAULT '[]'::jsonb,
         referred_by VARCHAR(64) DEFAULT NULL,
@@ -86,6 +86,10 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS has_notified_24h_stopped BOOLEAN DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS has_activated_referral BOOLEAN DEFAULT FALSE;
       ALTER TABLE referrals ADD COLUMN IF NOT EXISTS has_started_mining BOOLEAN DEFAULT FALSE;
+
+      -- Migration: Default base daily mining rate to 0.0500 USDT
+      ALTER TABLE users ALTER COLUMN daily_mining_rate SET DEFAULT 0.0500;
+      UPDATE users SET daily_mining_rate = 0.0500 WHERE daily_mining_rate = 0.0290;
     `);
 
     console.log('✅ Neon PostgreSQL Database & Tables initialized successfully!');
@@ -189,7 +193,11 @@ async function getUserFullDetails(telegramId) {
   );
 
   const refRes = await pool.query(
-    'SELECT * FROM referrals WHERE referrer_id = $1 ORDER BY created_at DESC',
+    `SELECT r.*, u.photo_url, u.first_name, u.last_name, u.username
+     FROM referrals r
+     LEFT JOIN users u ON r.referred_id = u.telegram_id
+     WHERE r.referrer_id = $1
+     ORDER BY r.created_at DESC`,
     [tid]
   );
 
@@ -273,37 +281,35 @@ async function recordVerifiedDeposit({ telegramId, amount, txHash, network = 'BE
     note: `USDT Deposit verified via ${network}`
   });
 
-  // Check if user has a referrer, give 10% instant commission to referrer's WITHDRAWABLE balance
+  // When a referred user deposits, give flat $0.05 commission to referrer's WITHDRAWABLE balance
   if (updatedUser && updatedUser.referred_by) {
-    const commission = Number((numAmount * 0.10).toFixed(6));
-    if (commission > 0) {
-      const referrerId = updatedUser.referred_by;
-      await pool.query(
-        `UPDATE users
-         SET wallet_balance = wallet_balance + $1,
-             total_referral_bonus = total_referral_bonus + $1,
-             updated_at = NOW()
-         WHERE telegram_id = $2`,
-        [commission, referrerId]
-      );
+    const commission = 0.05; // Fixed $0.05 reward to referrer on deposit
+    const referrerId = updatedUser.referred_by;
+    await pool.query(
+      `UPDATE users
+       SET wallet_balance = wallet_balance + $1,
+           total_referral_bonus = total_referral_bonus + $1,
+           updated_at = NOW()
+       WHERE telegram_id = $2`,
+      [commission, referrerId]
+    );
 
-      await pool.query(
-        `UPDATE referrals 
-         SET deposit_amount = deposit_amount + $1,
-             commission_earned = commission_earned + $2
-         WHERE referrer_id = $3 AND referred_id = $4`,
-        [numAmount, commission, referrerId, tid]
-      );
+    await pool.query(
+      `UPDATE referrals 
+       SET deposit_amount = deposit_amount + $1,
+           commission_earned = commission_earned + $2
+       WHERE referrer_id = $3 AND referred_id = $4`,
+      [numAmount, commission, referrerId, tid]
+    );
 
-      await addTransaction({
-        telegramId: referrerId,
-        type: 'referral_bonus',
-        amount: commission,
-        network: 'BEP20',
-        status: 'Completed',
-        note: `10% referral commission from user ${tid}`
-      });
-    }
+    await addTransaction({
+      telegramId: referrerId,
+      type: 'referral_bonus',
+      amount: commission,
+      network: 'BEP20',
+      status: 'Completed',
+      note: `Referral commission from deposit by user ${tid}`
+    });
   }
 
   return updatedUser;
@@ -436,10 +442,11 @@ async function startUserMining(telegramId) {
         [tid]
       );
 
-      // 3. Increment referrer total_referrals and boost hashrate!
+      // 3. Increment referrer total_referrals, add $0.005/day to daily_mining_rate, and boost hashrate!
       await pool.query(
         `UPDATE users 
          SET total_referrals = total_referrals + 1,
+             daily_mining_rate = daily_mining_rate + 0.0050,
              hashrate = hashrate + 0.10,
              updated_at = NOW()
          WHERE telegram_id = $1`,

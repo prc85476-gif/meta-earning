@@ -10,7 +10,8 @@ import {
   ArrowRight,
   TrendingUp,
   CheckCircle2,
-  DollarSign
+  DollarSign,
+  User
 } from 'lucide-react';
 import { translations, copyToClipboard, formatUSDT } from '../utils/formatters';
 import { triggerHaptic, getTelegramWebApp } from '../utils/telegram';
@@ -19,8 +20,7 @@ export const FriendsTab = ({
   user, 
   lang, 
   totalReferralBonus = 0.00,
-  referralList = [],
-  onReferralUserDeposit
+  referralList = []
 }) => {
   const t = translations[lang] || translations.en;
   const [copied, setCopied] = useState(false);
@@ -202,48 +202,64 @@ export const FriendsTab = ({
         </div>
 
         <div className="ref-friends-list">
-          {referralList.map((friend) => (
-            <div key={friend.id} className="ref-friend-item">
-              <div className="ref-friend-left">
-                <div 
-                  className="ref-friend-avatar"
-                  style={{ background: friend.avatarBg }}
-                >
-                  {friend.initial}
+          {referralList.length === 0 ? (
+            <div className="ref-empty-state">
+              <div className="ref-empty-icon-wrap">
+                <Users size={28} color="#94a3b8" />
+              </div>
+              <span className="ref-empty-title">
+                {lang === 'bn' ? 'কোনো রেফারেল পাওয়া যায়নি' : 'No Referrals Yet'}
+              </span>
+              <span className="ref-empty-sub">
+                {lang === 'bn' 
+                  ? 'আপনার রেফারেল লিংক শেয়ার করে বন্ধুদের ইনভাইট করুন।'
+                  : 'Share your personal referral link to invite friends and earn rewards.'}
+              </span>
+            </div>
+          ) : (
+            referralList.map((friend) => (
+              <div key={friend.id} className="ref-friend-item">
+                <div className="ref-friend-left">
+                  <div className="ref-tg-profile-pic">
+                    {friend.photo_url ? (
+                      <img 
+                        src={friend.photo_url} 
+                        alt={friend.name} 
+                        className="ref-friend-img" 
+                      />
+                    ) : (
+                      <div className="ref-tg-avatar-circle">
+                        <User size={18} color="#ffffff" strokeWidth={2.4} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="ref-friend-info">
+                    <span className="ref-friend-name">{friend.name}</span>
+                    <span className="ref-friend-sub">
+                      <span>{friend.username}</span>
+                      {friend.time && (
+                        <>
+                          <span>•</span>
+                          <span>{lang === 'bn' ? (friend.timeBn || friend.time) : friend.time}</span>
+                        </>
+                      )}
+                    </span>
+                  </div>
                 </div>
-                <div className="ref-friend-info">
-                  <span className="ref-friend-name">{friend.name}</span>
-                  <span className="ref-friend-sub">
-                    <span>{friend.username}</span>
-                    <span>•</span>
-                    <span>{lang === 'bn' ? (friend.timeBn || friend.time) : friend.time}</span>
+
+                <div className="ref-friend-right">
+                  <span className={`ref-friend-reward ${friend.commission > 0 ? 'active' : 'zero'}`}>
+                    {friend.commission > 0 ? `+${formatUSDT(friend.commission)} USDT` : '0 USDT'}
+                  </span>
+                  <span className={`ref-friend-status ${friend.hasDeposited ? 'deposited' : 'pending'}`}>
+                    {friend.hasDeposited 
+                      ? (lang === 'bn' ? `ডিপোজিট: $${friend.depositAmount}` : `Deposited: $${friend.depositAmount}`)
+                      : (lang === 'bn' ? 'ডিপোজিট নেই' : 'No Deposit')}
                   </span>
                 </div>
               </div>
-
-              <div className="ref-friend-right">
-                <span className={`ref-friend-reward ${friend.commission > 0 ? 'active' : 'zero'}`}>
-                  {friend.commission > 0 ? `+${formatUSDT(friend.commission)} USDT` : '0 USDT'}
-                </span>
-                <span className={`ref-friend-status ${friend.hasDeposited ? 'deposited' : 'pending'}`}>
-                  {friend.hasDeposited 
-                    ? (lang === 'bn' ? `ডিপোজিট: $${friend.depositAmount}` : `Deposited: $${friend.depositAmount}`)
-                    : (lang === 'bn' ? 'ডিপোজিট নেই' : 'No Deposit')}
-                </span>
-                {onReferralUserDeposit && !friend.hasDeposited && (
-                  <button
-                    type="button"
-                    className="btn-ref-simulate-deposit"
-                    onClick={() => onReferralUserDeposit(friend.id, 10)}
-                    title={lang === 'bn' ? '$১০ ডিপোজিট টেস্ট (১০% কমিশন উইথড্র ব্যালেন্সে যাবে)' : 'Simulate $10 deposit'}
-                  >
-                    <Coins size={10} />
-                    <span>{lang === 'bn' ? 'ডিপোজিট ($১০)' : 'Deposit ($10)'}</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
     </div>

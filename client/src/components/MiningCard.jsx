@@ -161,7 +161,7 @@ export const MiningCard = ({
           </div>
           <span className="stat-label">Daily Earning</span>
           <span className="stat-value green">
-            +{dailyEarning || activePlan?.dailyEst || '0.029 USDT'}
+            +{dailyEarning || activePlan?.dailyEst || '0.05 USDT'}
           </span>
         </div>
 

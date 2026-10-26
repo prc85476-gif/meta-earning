@@ -467,7 +467,7 @@ async function checkMiningNotifications() {
     for (const u of res.rows) {
       const startTime = new Date(u.mining_started_at).getTime();
       const elapsed = now - startTime;
-      const dailyRate = Number(u.daily_mining_rate) || 0.029;
+      const dailyRate = Number(u.daily_mining_rate) || 0.05;
 
       // 1. 24 Hours finished: Mining stops and notify user!
       if (elapsed >= SESSION_MS) {

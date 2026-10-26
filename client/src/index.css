@@ -3285,9 +3285,9 @@ dialog::backdrop {
 }
 
 .ref-friend-avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3296,6 +3296,72 @@ dialog::backdrop {
   color: #ffffff;
   flex-shrink: 0;
   box-shadow: none;
+}
+
+.ref-tg-profile-pic {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ref-friend-img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid #e2e8f0;
+}
+
+.ref-tg-avatar-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #24A1DE;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(36, 161, 222, 0.25);
+}
+
+.ref-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 16px;
+  background: #f8fafc;
+  border: 1.5px dashed #cbd5e1;
+  border-radius: 14px;
+}
+
+.ref-empty-icon-wrap {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.ref-empty-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #334155;
+  margin: 0 0 4px 0;
+}
+
+.ref-empty-sub {
+  font-size: 11px;
+  color: #64748b;
+  max-width: 260px;
+  line-height: 1.4;
+  margin: 0;
 }
 
 .ref-friend-info {

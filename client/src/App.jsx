@@ -94,58 +94,19 @@ export function App() {
   const [referralList, setReferralList] = useState(() => {
     const saved = localStorage.getItem('usdt_referral_list');
     if (saved) {
-      try { return JSON.parse(saved); } catch {}
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // Clear old mock list if it contains mock IDs or Shohan
+          if (parsed.some(p => p.id === '1' || p.name === 'Shohan Ahmed' || p.id === '2')) {
+            localStorage.removeItem('usdt_referral_list');
+            return [];
+          }
+          return parsed;
+        }
+      } catch {}
     }
-    return [
-      {
-        id: '1',
-        name: 'Shohan Ahmed',
-        username: '@shohan_miner',
-        avatarBg: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-        initial: 'S',
-        time: 'Today',
-        timeBn: 'আজকে',
-        depositAmount: 0,
-        commission: 0,
-        hasDeposited: false
-      },
-      {
-        id: '2',
-        name: 'Tariqul Islam',
-        username: '@tariq_usdt',
-        avatarBg: 'linear-gradient(135deg, #10b981, #047857)',
-        initial: 'T',
-        time: 'Yesterday',
-        timeBn: 'গতকাল',
-        depositAmount: 0,
-        commission: 0,
-        hasDeposited: false
-      },
-      {
-        id: '3',
-        name: 'Rahim Khan',
-        username: '@rahim_crypto',
-        avatarBg: 'linear-gradient(135deg, #8b5cf6, #6d28d9)',
-        initial: 'R',
-        time: '2 days ago',
-        timeBn: '২ দিন আগে',
-        depositAmount: 0,
-        commission: 0,
-        hasDeposited: false
-      },
-      {
-        id: '4',
-        name: 'Sumon Hossain',
-        username: '@sumon_vip',
-        avatarBg: 'linear-gradient(135deg, #f59e0b, #b45309)',
-        initial: 'S',
-        time: '4 days ago',
-        timeBn: '৪ দিন আগে',
-        depositAmount: 0,
-        commission: 0,
-        hasDeposited: false
-      }
-    ];
+    return [];
   });
 
   const [totalReferralBonus, setTotalReferralBonus] = useState(() => {
@@ -266,15 +227,17 @@ export function App() {
           if (Array.isArray(u.purchased_plans) && u.purchased_plans.length > 0) {
             setPurchasedPlanIds(u.purchased_plans);
           }
-          if (Array.isArray(u.referrals) && u.referrals.length > 0) {
-            const mapped = u.referrals.map((r, i) => ({
+          if (u.daily_mining_rate !== undefined) {
+            setDailyMiningRate(Number(u.daily_mining_rate));
+          }
+          if (Array.isArray(u.referrals)) {
+            const mapped = u.referrals.map((r) => ({
               id: r.referred_id,
-              name: r.referred_name || 'Member',
-              username: r.referred_username ? `@${r.referred_username}` : '@user',
-              avatarBg: ['linear-gradient(135deg, #3b82f6, #1d4ed8)', 'linear-gradient(135deg, #10b981, #047857)', 'linear-gradient(135deg, #8b5cf6, #6d28d9)'][i % 3],
-              initial: (r.referred_name || 'M').charAt(0).toUpperCase(),
-              time: 'Joined via link',
-              timeBn: 'লিংকে জয়েন করেছে',
+              name: r.referred_name || r.first_name || (r.referred_id ? `User ${r.referred_id}` : 'Member'),
+              username: r.referred_username || r.username ? `@${r.referred_username || r.username}` : (r.referred_id ? `ID: ${r.referred_id}` : '@user'),
+              photo_url: r.photo_url || null,
+              time: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Joined via link',
+              timeBn: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'লিংকে জয়েন করেছে',
               depositAmount: Number(r.deposit_amount || 0),
               commission: Number(r.commission_earned || 0),
               hasDeposited: Number(r.deposit_amount || 0) > 0
@@ -324,8 +287,9 @@ export function App() {
     localStorage.setItem('usdt_purchased_plans', JSON.stringify(purchasedPlanIds));
   }, [purchasedPlanIds]);
 
-  const BASE_DAILY = 0.029;
+  const BASE_DAILY = 0.05;
   const BASE_HASHRATE = 1.22;
+  const [dailyMiningRate, setDailyMiningRate] = useState(0.05);
 
   // Stacking daily earning: base + every purchased plan's daily profit
   const totalDailyEarning = useMemo(() => {
@@ -333,8 +297,9 @@ export function App() {
       const p = DEPOSIT_PLANS.find(plan => plan.id === id);
       return sum + (p ? p.dailyProfit : 0);
     }, 0);
-    return Number((BASE_DAILY + planBonus).toFixed(3));
-  }, [purchasedPlanIds]);
+    const base = dailyMiningRate || BASE_DAILY;
+    return Number((base + planBonus).toFixed(4));
+  }, [purchasedPlanIds, dailyMiningRate]);
 
   // Stacking hashrate: base + every purchased plan's hashrate
   const totalHashrate = useMemo(() => {
@@ -931,7 +896,6 @@ export function App() {
             lang={lang} 
             totalReferralBonus={totalReferralBonus} 
             referralList={referralList}
-            onReferralUserDeposit={handleReferralUserDeposit}
           />
         )}
 

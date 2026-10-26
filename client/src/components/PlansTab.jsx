@@ -10,7 +10,7 @@ export const PLANS_DATA = [
     price: 0,
     hourlyRate: '0.00122',
     hashrate: '1.22 GH/s',
-    dailyEst: '0.029 USDT',
+    dailyEst: '0.05 USDT',
     badgeColor: '#10b981'
   },
   {
