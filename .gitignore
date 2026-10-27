@@ -5,3 +5,5 @@ dist
 *.log
 client/node_modules
 client/dist
+scratch/
+/85b68030b9a892181c9c9aa69df0dcfc.jpg

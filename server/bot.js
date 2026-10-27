@@ -447,9 +447,13 @@ function initTelegramBot(webappUrl) {
         return;
       }
 
-      // Existing callbacks if triggered
+      // Callbacks for Account, History, Mining, Referrals, and Stats
       if (data === 'my_account') {
         return sendUserAccountInfo(chatId, userId);
+      } else if (data === 'my_referrals') {
+        return sendUserReferralInfo(chatId, userId);
+      } else if (data === 'my_mining') {
+        return sendUserMiningInfo(chatId, userId);
       } else if (data === 'my_history') {
         return sendUserHistory(chatId, userId);
       } else if (data === 'bot_stats') {
@@ -457,7 +461,7 @@ function initTelegramBot(webappUrl) {
       }
     });
 
-    // Helper: Show User Account Details (if typed directly via /account or /profile)
+    // Helper: Show User Account Details
     async function sendUserAccountInfo(chatId, userId) {
       try {
         const user = await getUserFullDetails(userId);
@@ -471,30 +475,179 @@ function initTelegramBot(webappUrl) {
 
         const refLink = `https://t.me/${botUsername}?start=${user.telegram_id}`;
 
+        const isMining = user.is_mining_active && user.mining_started_at;
+        let miningStatusText = '🔴 Inactive (Mining is stopped)';
+        if (isMining) {
+          const now = Date.now();
+          const startTime = new Date(user.mining_started_at).getTime();
+          const elapsed = now - startTime;
+          const SESSION_MS = 24 * 60 * 60 * 1000;
+          if (elapsed < SESSION_MS) {
+            const remHours = Math.floor((SESSION_MS - elapsed) / (3600 * 1000));
+            const remMins = Math.floor(((SESSION_MS - elapsed) % (3600 * 1000)) / (60 * 1000));
+            miningStatusText = `🟢 Active (${remHours}h ${remMins}m remaining)`;
+          } else {
+            miningStatusText = `⏳ 24h Cycle Complete (Ready to Claim)`;
+          }
+        }
+
+        const unclaimedBonus = Number(user.live_mined_unclaimed || user.mined_unclaimed || 0).toFixed(6);
+
         const text = 
-`👤 *Account Details:*\n\n` +
+`👤 *Account Details & Balance:*\n\n` +
 `• *Name:* ${user.first_name || ''} ${user.last_name || ''} (@${user.username || 'N/A'})\n` +
 `• *Telegram ID:* \`${user.telegram_id}\`\n\n` +
-`💰 *Balances:*\n` +
+`💰 *Account Balances:*\n` +
 `• *Withdrawable Balance (Main):* \`${Number(user.wallet_balance).toFixed(4)} USDT\`\n` +
 `• *Deposit Balance:* \`${Number(user.deposit_balance).toFixed(2)} USDT\`\n` +
 `• *Total Deposited:* \`${Number(user.total_deposit).toFixed(2)} USDT\`\n` +
 `• *Total Withdrawn:* \`${Number(user.total_withdraw).toFixed(2)} USDT\`\n\n` +
 `⛏️ *Mining:*\n` +
+`• *Status:* ${miningStatusText}\n` +
+`• *Mined Bonus (Unclaimed):* \`${unclaimedBonus} USDT\`\n` +
 `• *Daily Mining Rate:* \`${Number(user.daily_mining_rate).toFixed(4)} USDT/day\`\n` +
 `• *Hashrate:* \`${Number(user.hashrate).toFixed(2)} GH/s\`\n\n` +
 `🔒 *Withdraw Address (BEP20):*\n` +
 `• ${addressInfo}\n\n` +
-`👥 *Referral:* \`${user.total_referrals || 0} users\`\n` +
+`👥 *Referrals:* \`${(user.referrals && user.referrals.length) ? user.referrals.length : (user.total_referrals || 0)} users\`\n` +
 `• *Referral Bonus (10%):* \`${Number(user.total_referral_bonus).toFixed(2)} USDT\`\n` +
-`• *Your Link:*\n\`${refLink}\``;
+`• *Your Invite Link:*\n\`${refLink}\``;
 
+        const webappUrl = globalWebappUrl || 'http://localhost:3000';
         await bot.sendMessage(chatId, text, {
           parse_mode: 'Markdown',
-          reply_markup: getWelcomeActionKeyboard()
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🚀 Open Meta Farm', web_app: { url: webappUrl } }
+              ],
+              [
+                { text: '⛏️ Mining Status', callback_data: 'my_mining' },
+                { text: '👥 My Referrals', callback_data: 'my_referrals' }
+              ],
+              [
+                { text: '📜 History', callback_data: 'my_history' },
+                { text: '🌐 Bot Stats', callback_data: 'bot_stats' }
+              ]
+            ]
+          }
         });
       } catch (err) {
         console.error('Error in sendUserAccountInfo:', err);
+      }
+    }
+
+    // Helper: Show User Referral Details
+    async function sendUserReferralInfo(chatId, userId) {
+      try {
+        const user = await getUserFullDetails(userId);
+        if (!user) {
+          return bot.sendMessage(chatId, 'User not found. Please type /start.');
+        }
+
+        const refLink = `https://t.me/${botUsername}?start=${user.telegram_id}`;
+        const refCount = (user.referrals && user.referrals.length) ? user.referrals.length : (user.total_referrals || 0);
+        const refBonus = Number(user.total_referral_bonus || 0).toFixed(2);
+
+        let text = 
+`👥 *Referral Program (Meta Farm):*\n\n` +
+`Share your referral link to boost your daily mining speed & receive *10% cash commission* directly to your withdrawable balance whenever your friend deposits!\n\n` +
+`📊 *Your Referral Stats:*\n` +
+`• *Total Friends Invited:* \`${refCount} users\`\n` +
+`• *Total 10% Cash Bonus Earned:* \`${refBonus} USDT\`\n\n` +
+`🔗 *Your Personal Referral Link:*\n\`${refLink}\`\n\n`;
+
+        if (user.referrals && user.referrals.length > 0) {
+          text += `👥 *Recent Friends (Last ${Math.min(5, user.referrals.length)}):*\n`;
+          user.referrals.slice(0, 5).forEach((r, idx) => {
+            const name = r.first_name || r.referred_name || `User ${r.referred_id}`;
+            const uname = r.username ? `@${r.username}` : (r.referred_username ? `@${r.referred_username}` : '');
+            const miningStatus = r.has_started_mining ? '🟢 Mining' : '⚪ Joined';
+            text += `${idx + 1}. *${name}* ${uname ? '(' + uname + ')' : ''} — ${miningStatus}\n`;
+          });
+        } else {
+          text += `_No referrals yet. Share your invite link above to start earning!_`;
+        }
+
+        const shareText = encodeURIComponent('⚡ Join Meta Farm to mine free USDT daily on Binance Smart Chain!');
+        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(refLink)}&text=${shareText}`;
+        const webappUrl = globalWebappUrl || 'http://localhost:3000';
+
+        await bot.sendMessage(chatId, text, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '📤 Share Link on Telegram', url: shareUrl }
+              ],
+              [
+                { text: '🚀 Open Meta Farm', web_app: { url: webappUrl } },
+                { text: '💰 My Balance', callback_data: 'my_account' }
+              ]
+            ]
+          }
+        });
+      } catch (err) {
+        console.error('Error in sendUserReferralInfo:', err);
+      }
+    }
+
+    // Helper: Show Mining Details
+    async function sendUserMiningInfo(chatId, userId) {
+      try {
+        const user = await getUserFullDetails(userId);
+        if (!user) {
+          return bot.sendMessage(chatId, 'User not found. Please type /start.');
+        }
+
+        const isMining = user.is_mining_active && user.mining_started_at;
+        const now = Date.now();
+        const SESSION_MS = 24 * 60 * 60 * 1000;
+        let miningStatusText = '🔴 Inactive (Mining is stopped)';
+        let timeLeftText = '0h 0m';
+
+        if (isMining) {
+          const startTime = new Date(user.mining_started_at).getTime();
+          const elapsed = now - startTime;
+          if (elapsed < SESSION_MS) {
+            const remHours = Math.floor((SESSION_MS - elapsed) / (3600 * 1000));
+            const remMins = Math.floor(((SESSION_MS - elapsed) % (3600 * 1000)) / (60 * 1000));
+            miningStatusText = `🟢 Active Mining in Progress`;
+            timeLeftText = `${remHours}h ${remMins}m remaining`;
+          } else {
+            miningStatusText = `⏳ 24-Hour Cycle Completed`;
+            timeLeftText = 'Ready to claim reward';
+          }
+        }
+
+        const minedAmount = Number(user.live_mined_unclaimed || user.mined_unclaimed || 0).toFixed(6);
+
+        const text = 
+`⛏️ *USDT Cloud Mining Status:*\n\n` +
+`• *Status:* ${miningStatusText}\n` +
+`• *Time Left:* \`${timeLeftText}\`\n` +
+`• *Mined Bonus (Unclaimed):* \`${minedAmount} USDT\`\n` +
+`• *Daily Mining Rate:* \`${Number(user.daily_mining_rate || 0.05).toFixed(4)} USDT/day\`\n` +
+`• *Hashrate:* \`${Number(user.hashrate || 1.22).toFixed(2)} GH/s\`\n\n` +
+`💡 _Open Meta Farm below to claim your mined bonus to your main balance or start a fresh mining cycle!_`;
+
+        const webappUrl = globalWebappUrl || 'http://localhost:3000';
+        await bot.sendMessage(chatId, text, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🚀 Claim & Mine in App', web_app: { url: webappUrl } }
+              ],
+              [
+                { text: '💰 My Balance', callback_data: 'my_account' },
+                { text: '👥 My Referrals', callback_data: 'my_referrals' }
+              ]
+            ]
+          }
+        });
+      } catch (err) {
+        console.error('Error in sendUserMiningInfo:', err);
       }
     }
 
@@ -528,9 +681,17 @@ function initTelegramBot(webappUrl) {
           text += `   • Date: ${time}\n\n`;
         });
 
+        const webappUrl = globalWebappUrl || 'http://localhost:3000';
         await bot.sendMessage(chatId, text, {
           parse_mode: 'Markdown',
-          reply_markup: getWelcomeActionKeyboard()
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🚀 Open Meta Farm', web_app: { url: webappUrl } },
+                { text: '💰 My Balance', callback_data: 'my_account' }
+              ]
+            ]
+          }
         });
       } catch (err) {
         console.error('Error in sendUserHistory:', err);
@@ -563,7 +724,7 @@ function initTelegramBot(webappUrl) {
 
     // Direct text commands
     bot.on('message', async (msg) => {
-      const text = msg.text || '';
+      const text = (msg.text || '').trim();
       const chatId = msg.chat.id;
       const userId = msg.from ? msg.from.id : chatId;
 
@@ -574,6 +735,14 @@ function initTelegramBot(webappUrl) {
 
       if (text === '/account' || text === '/profile' || text === '/balance') {
         return sendUserAccountInfo(chatId, userId);
+      }
+
+      if (text === '/referral' || text === '/referrals' || text === '/ref' || text === '/friends') {
+        return sendUserReferralInfo(chatId, userId);
+      }
+
+      if (text === '/mining' || text === '/mine' || text === '/bonus' || text === '/claim') {
+        return sendUserMiningInfo(chatId, userId);
       }
 
       if (text === '/history') {

@@ -25,7 +25,7 @@ export function App() {
   // Balances
   const [walletBalance, setWalletBalance] = useState(() => {
     const saved = localStorage.getItem('usdt_wallet_balance');
-    return saved !== null ? parseFloat(saved) : 5.00;
+    return saved !== null ? parseFloat(saved) : 0.00;
   });
 
   // 24-Hour Mining Session Constants & State
@@ -244,6 +244,7 @@ export function App() {
           first_name: tgUser?.first_name || user?.first_name,
           last_name: tgUser?.last_name || user?.last_name,
           username: tgUser?.username || user?.username,
+          photo_url: tgUser?.photo_url || user?.photo_url,
           refCode: startRef || undefined
         })
       });
@@ -258,19 +259,39 @@ export function App() {
         if (u.withdraw_address) {
           localStorage.setItem('usdt_locked_withdraw_address', u.withdraw_address);
         }
+        if (u.claimed_in_session !== undefined) {
+          setClaimedInSession(Number(u.claimed_in_session));
+        }
+
         if (u.mining_started_at && u.is_mining_active) {
           const serverStart = new Date(u.mining_started_at).getTime();
           const elapsed = Date.now() - serverStart;
           if (elapsed < SESSION_DURATION_MS) {
             setMiningStartTime(serverStart);
             setIsMiningActive(true);
+            setMiningStatus('mining');
             localStorage.setItem('usdt_mining_start_time', serverStart.toString());
             localStorage.setItem('usdt_is_mining_active', 'true');
           } else {
             setIsMiningActive(false);
+            setMiningStatus('completed');
             localStorage.setItem('usdt_is_mining_active', 'false');
+            if (u.live_mined_unclaimed !== undefined) {
+              setMinedBalance(Number(u.live_mined_unclaimed));
+            }
+          }
+        } else {
+          setIsMiningActive(false);
+          localStorage.setItem('usdt_is_mining_active', 'false');
+          const uncollected = Number(u.live_mined_unclaimed || u.mined_unclaimed || 0);
+          if (uncollected > 0.000001) {
+            setMiningStatus('completed');
+            setMinedBalance(uncollected);
+          } else {
+            setMiningStatus('idle');
           }
         }
+
         if (Array.isArray(u.purchased_plans) && u.purchased_plans.length > 0) {
           setPurchasedPlanIds(u.purchased_plans);
         }
@@ -280,8 +301,8 @@ export function App() {
         if (Array.isArray(u.referrals)) {
           const mapped = u.referrals.map((r) => ({
             id: r.referred_id,
-            name: r.referred_name || r.first_name || (r.referred_id ? `User ${r.referred_id}` : 'Member'),
-            username: r.referred_username || r.username ? `@${r.referred_username || r.username}` : (r.referred_id ? `ID: ${r.referred_id}` : '@user'),
+            name: (r.first_name ? `${r.first_name} ${r.last_name || ''}`.trim() : r.referred_name) || (r.referred_id ? `User ${r.referred_id}` : 'Member'),
+            username: r.username ? `@${r.username}` : (r.referred_username ? `@${r.referred_username}` : (r.referred_id ? `ID: ${r.referred_id}` : '@user')),
             photo_url: r.photo_url || null,
             time: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Joined via link',
             timeBn: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'লিংকে জয়েন করেছে',
@@ -368,6 +389,18 @@ export function App() {
   useEffect(() => {
     localStorage.setItem('usdt_purchased_plans', JSON.stringify(purchasedPlanIds));
   }, [purchasedPlanIds]);
+
+  useEffect(() => {
+    localStorage.setItem('usdt_total_referral_bonus', totalReferralBonus.toString());
+  }, [totalReferralBonus]);
+
+  useEffect(() => {
+    localStorage.setItem('usdt_total_withdraw', totalWithdraw.toString());
+  }, [totalWithdraw]);
+
+  useEffect(() => {
+    localStorage.setItem('usdt_claimed_in_session', claimedInSession.toString());
+  }, [claimedInSession]);
 
   const BASE_DAILY = 0.05;
   const BASE_HASHRATE = 1.22;
@@ -536,9 +569,17 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: user?.id || '987654321',
-          amount: claimedAmt
+          amount: claimedAmt,
+          restart: false
         })
-      }).catch(err => console.log('Notice saving claim to DB:', err.message));
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.success && data.user) {
+          setWalletBalance(Number(data.user.wallet_balance));
+        }
+      })
+      .catch(err => console.log('Notice saving claim to DB:', err.message));
 
       showToast(
         lang === 'bn'
@@ -551,35 +592,6 @@ export function App() {
   // Start fresh 24-hour mining cycle (or claim remaining and restart)
   const handleStartMining = () => {
     triggerHaptic('medium');
-
-    // If there is any remaining uncollected balance from completed 24h session, transfer it first!
-    if (minedBalance > 0.000001) {
-      const remainingAmt = minedBalance;
-      setWalletBalance((prev) => {
-        const next = prev + remainingAmt;
-        localStorage.setItem('usdt_wallet_balance', next.toFixed(6));
-        return next;
-      });
-
-      const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-      const newTx = {
-        type: 'claim',
-        amount: remainingAmt,
-        network: 'Internal Mining Pool',
-        date: timeStr,
-        status: 'Completed'
-      };
-      setTransactions((prev) => [newTx, ...prev]);
-
-      fetch('/api/claim', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user?.id || '987654321',
-          amount: remainingAmt
-        })
-      }).catch(err => console.log('Notice saving claim to DB:', err.message));
-    }
 
     // Begin fresh 24-hour session
     const now = Date.now();
@@ -603,7 +615,19 @@ export function App() {
       body: JSON.stringify({
         userId: user?.id || '987654321'
       })
-    }).catch(err => console.log('Notice starting mining in DB:', err.message));
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data && data.success && data.user) {
+        setWalletBalance(Number(data.user.wallet_balance));
+        if (data.user.mining_started_at) {
+          const s = new Date(data.user.mining_started_at).getTime();
+          setMiningStartTime(s);
+          localStorage.setItem('usdt_mining_start_time', s.toString());
+        }
+      }
+    })
+    .catch(err => console.log('Notice starting mining in DB:', err.message));
 
     showToast(
       lang === 'bn'
@@ -740,76 +764,100 @@ export function App() {
 
 
   // Handle user withdrawal submission (Pending in account history)
-  const handleWithdrawSubmit = ({ address, amount, network, netAmount, fee }) => {
+  const handleWithdrawSubmit = async ({ address, amount, network, netAmount, fee }) => {
     const numAmount = parseFloat(amount);
+    const tgUser = getTelegramUser();
+    const actualUserId = tgUser?.id ? String(tgUser.id) : (user?.id ? String(user.id) : '987654321');
 
-    // 1. Deduct from withdrawable walletBalance
-    setWalletBalance((prev) => {
-      const updated = Math.max(0, prev - numAmount);
-      localStorage.setItem('usdt_wallet_balance', updated.toFixed(6));
-      return updated;
-    });
-
-    // 2. Add to totalWithdraw
-    setTotalWithdraw((prev) => {
-      const updated = prev + numAmount;
-      localStorage.setItem('usdt_total_withdraw', updated.toFixed(2));
-      return updated;
-    });
-
-    // 3. Add to activities & transactions with 'Pending' status
-    const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-    const newActivity = {
-      id: Date.now().toString(),
-      type: 'withdraw',
-      title: 'Withdrawal',
-      subtitle: `USDT (${network}) • ${address.substring(0, 6)}...${address.substring(address.length - 4)}`,
-      amount: `-${numAmount.toFixed(2)} USDT`,
-      time: timeStr,
-      status: 'Pending'
-    };
-    setActivities((prev) => [newActivity, ...prev]);
-
-    setTransactions((prev) => [
-      {
-        type: 'withdraw',
-        amount: numAmount,
-        network: `${network} (BSC)`,
-        address,
-        date: timeStr,
-        status: 'Pending'
-      },
-      ...prev
-    ]);
-
-    // 4. Permanently lock address and register as used
-    localStorage.setItem('usdt_locked_withdraw_address', address);
     try {
-      const existing = JSON.parse(localStorage.getItem('usdt_registered_addresses') || '[]');
-      if (!existing.includes(address.toLowerCase())) {
-        existing.push(address.toLowerCase());
-        localStorage.setItem('usdt_registered_addresses', JSON.stringify(existing));
+      const response = await fetch('/api/withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: actualUserId,
+          amount: numAmount,
+          address,
+          network: network || 'BEP20'
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        return {
+          success: false,
+          message: data.message || (lang === 'bn' ? 'উইথড্র প্রক্রিয়াকরণে সমস্যা হয়েছে।' : 'Withdrawal failed')
+        };
       }
-    } catch {}
 
-    triggerHaptic('success');
-    showToast(
-      lang === 'bn'
-        ? `উইথড্র রিকোয়েস্ট জমা হয়েছে! অ্যাকাউন্ট হিস্টোরিতে স্ট্যাটাস পেন্ডিং রয়েছে।`
-        : `Withdrawal request submitted! Status is pending in Account History.`
-    );
+      // 1. Deduct from withdrawable walletBalance
+      const newBal = data.walletBalance !== undefined 
+        ? Number(data.walletBalance) 
+        : Math.max(0, walletBalance - numAmount);
+      setWalletBalance(newBal);
+      localStorage.setItem('usdt_wallet_balance', newBal.toFixed(6));
 
-    // Sync withdraw to Neon PostgreSQL Database
-    fetch('/api/withdraw', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: user?.id || '987654321',
-        amount: numAmount,
-        address,
-        network: network || 'BEP20'
-      })
-    }).catch(err => console.log('Notice saving withdrawal to DB:', err.message));
+      // 2. Add to totalWithdraw
+      const newTotalWd = data.totalWithdraw !== undefined 
+        ? Number(data.totalWithdraw) 
+        : (totalWithdraw + numAmount);
+      setTotalWithdraw(newTotalWd);
+      localStorage.setItem('usdt_total_withdraw', newTotalWd.toFixed(2));
+
+      // 3. Add to activities & transactions with 'Pending' status
+      const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const txId = data.transaction?.id ? String(data.transaction.id) : Date.now().toString();
+
+      const newActivity = {
+        id: txId,
+        type: 'withdraw',
+        title: 'Withdrawal',
+        subtitle: `USDT (${network}) • ${address.substring(0, 6)}...${address.substring(address.length - 4)}`,
+        amount: `-${numAmount.toFixed(2)} USDT`,
+        time: timeStr,
+        status: 'Pending'
+      };
+      setActivities((prev) => [newActivity, ...prev]);
+
+      setTransactions((prev) => [
+        {
+          id: txId,
+          type: 'withdraw',
+          amount: numAmount,
+          network: `${network} (BSC)`,
+          address,
+          date: timeStr,
+          status: 'Pending'
+        },
+        ...prev
+      ]);
+
+      // 4. Permanently lock address and register as used
+      localStorage.setItem('usdt_locked_withdraw_address', address);
+      try {
+        const existing = JSON.parse(localStorage.getItem('usdt_registered_addresses') || '[]');
+        if (!existing.includes(address.toLowerCase())) {
+          existing.push(address.toLowerCase());
+          localStorage.setItem('usdt_registered_addresses', JSON.stringify(existing));
+        }
+      } catch {}
+
+      showToast(
+        lang === 'bn'
+          ? `উইথড্র রিকোয়েস্ট জমা হয়েছে! অ্যাকাউন্ট হিস্টোরিতে স্ট্যাটাস পেন্ডিং রয়েছে।`
+          : `Withdrawal request submitted! Status is pending in Account History.`
+      );
+
+      return {
+        success: true,
+        transaction: data.transaction
+      };
+    } catch (err) {
+      console.error('Withdraw submit error:', err);
+      return {
+        success: false,
+        message: err.message || (lang === 'bn' ? 'সার্ভারের সাথে সংযোগ বিচ্ছিন্ন হয়েছে।' : 'Network connection error')
+      };
+    }
   };
 
   // If tab was previously set to 'plans' or 'wallet', fallback to 'mining'

@@ -76,7 +76,7 @@ app.post('/api/user/sync', async (req, res) => {
   try {
     const actualId = req.body.id || req.body.telegramId || req.body.userId;
     const actualRef = req.body.refCode || req.body.referredBy || req.body.start_param;
-    const { first_name, firstName, last_name, lastName, username } = req.body;
+    const { first_name, firstName, last_name, lastName, username, photo_url, photoUrl } = req.body;
 
     if (!actualId) {
       return res.status(400).json({ success: false, message: 'User ID is required' });
@@ -87,6 +87,7 @@ app.post('/api/user/sync', async (req, res) => {
       first_name: first_name || firstName,
       last_name: last_name || lastName,
       username,
+      photo_url: photo_url || photoUrl,
       refCode: actualRef
     });
 
@@ -256,18 +257,24 @@ app.post('/api/deposit/verify', async (req, res) => {
     });
 
     // Send Instant Push Alert to Admin Bot (@alhajbf2)
-    notifyAdminNewDeposit({
-      txHash: result.txHash,
-      telegramId: actualUserId,
-      username: updatedUser.username,
-      firstName: updatedUser.first_name,
-      lastName: updatedUser.last_name,
-      amount: result.amount,
-      depositBalance: updatedUser.deposit_balance,
-      totalDeposit: updatedUser.total_deposit,
-      referredBy: updatedUser.referred_by,
-      date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    });
+    try {
+      await notifyAdminNewDeposit({
+        txHash: result.txHash,
+        telegramId: actualUserId,
+        username: updatedUser.username,
+        firstName: updatedUser.first_name,
+        lastName: updatedUser.last_name,
+        amount: result.amount,
+        depositBalance: updatedUser.deposit_balance,
+        walletBalance: updatedUser.wallet_balance,
+        totalDeposit: updatedUser.total_deposit,
+        totalReferrals: updatedUser.total_referrals,
+        referredBy: updatedUser.referred_by,
+        date: new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
+      });
+    } catch (dpErr) {
+      console.error('[DEPOSIT] Error sending admin deposit alert:', dpErr.message);
+    }
 
     // Send Instant Bot SMS to Depositor: "Deposit Credited", amount, network, BscScan button
     notifyUserDepositCredited(actualUserId, {
@@ -336,6 +343,8 @@ app.post('/api/withdraw', async (req, res) => {
 
     await getOrCreateUser({ id: actualUserId });
 
+    console.log(`[WITHDRAW] Processing withdrawal: user=${actualUserId}, amount=${numAmount}, address=${address}`);
+
     const { user, transaction } = await recordWithdrawalRequest({
       telegramId: actualUserId,
       amount: numAmount,
@@ -343,27 +352,37 @@ app.post('/api/withdraw', async (req, res) => {
       network: network || 'BEP20'
     });
 
+    console.log(`[WITHDRAW] Recorded withdrawal #${transaction.id} for user ${actualUserId}. Remaining balance: ${user.wallet_balance}`);
+
     // 1. Send instant notification to User's Bot (Wait 1-2 minutes & Channel buttons)
-    notifyUserWithdrawalSubmitted(actualUserId, {
-      amount: numAmount,
-      address,
-      network: network || 'BEP20'
-    });
+    try {
+      notifyUserWithdrawalSubmitted(actualUserId, {
+        amount: numAmount,
+        address,
+        network: network || 'BEP20'
+      });
+    } catch (botErr) {
+      console.warn('[WITHDRAW] Notice notifying user bot:', botErr.message);
+    }
 
     // 2. Send Instant Push Alert to Admin Bot with Approve & Reject buttons
-    notifyAdminNewWithdrawal({
-      id: transaction.id,
-      telegramId: actualUserId,
-      username: user.username,
-      firstName: user.first_name,
-      lastName: user.last_name,
-      amount: numAmount,
-      address,
-      walletBalance: user.wallet_balance,
-      depositBalance: user.deposit_balance,
-      totalReferrals: user.total_referrals,
-      date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    });
+    try {
+      await notifyAdminNewWithdrawal({
+        id: transaction.id,
+        telegramId: actualUserId,
+        username: user.username,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        amount: numAmount,
+        address,
+        walletBalance: user.wallet_balance,
+        depositBalance: user.deposit_balance,
+        totalReferrals: user.total_referrals,
+        date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      });
+    } catch (adminErr) {
+      console.error('[WITHDRAW] Error notifying admin bot:', adminErr.message);
+    }
 
     res.json({
       success: true,
@@ -473,7 +492,7 @@ async function startServer() {
 async function checkMiningNotifications() {
   try {
     const res = await pool.query(`
-      SELECT telegram_id, mining_started_at, is_mining_active, daily_mining_rate, has_notified_claim_001, has_notified_24h_stopped
+      SELECT telegram_id, mining_started_at, is_mining_active, daily_mining_rate, has_notified_claim_001, has_notified_24h_stopped, claimed_in_session, mined_unclaimed
       FROM users
       WHERE is_mining_active = TRUE AND mining_started_at IS NOT NULL
     `);
@@ -486,14 +505,20 @@ async function checkMiningNotifications() {
       const elapsed = now - startTime;
       const dailyRate = Number(u.daily_mining_rate) || 0.05;
 
-      // 1. 24 Hours finished: Mining stops and notify user!
+      // 1. 24 Hours finished: Mining stops, save completed mined earnings to mined_unclaimed, and notify user!
       if (elapsed >= SESSION_MS) {
         if (!u.has_notified_24h_stopped) {
+          const claimedInSession = Number(u.claimed_in_session || 0);
+          const remainingUncollected = Math.max(0, dailyRate - claimedInSession);
           await pool.query(
             `UPDATE users 
-             SET is_mining_active = FALSE, has_notified_24h_stopped = TRUE, updated_at = NOW() 
-             WHERE telegram_id = $1`,
-            [u.telegram_id]
+             SET is_mining_active = FALSE,
+                 mined_unclaimed = mined_unclaimed + $1,
+                 claimed_in_session = 0,
+                 has_notified_24h_stopped = TRUE,
+                 updated_at = NOW() 
+             WHERE telegram_id = $2`,
+            [remainingUncollected, u.telegram_id]
           );
           notifyUserMiningStopped(u.telegram_id);
         }
@@ -501,13 +526,15 @@ async function checkMiningNotifications() {
       // 2. Reached 0.01 USDT threshold: Notify user to claim!
       else {
         const progress = Math.min(1, elapsed / SESSION_MS);
-        const minedSoFar = dailyRate * progress;
-        if (minedSoFar >= 0.01 && !u.has_notified_claim_001) {
+        const totalSoFar = dailyRate * progress;
+        const claimedInSession = Number(u.claimed_in_session || 0);
+        const currentUnclaimed = Math.max(0, totalSoFar - claimedInSession);
+        if (currentUnclaimed >= 0.01 && !u.has_notified_claim_001) {
           await pool.query(
             `UPDATE users SET has_notified_claim_001 = TRUE, updated_at = NOW() WHERE telegram_id = $1`,
             [u.telegram_id]
           );
-          notifyUserClaimReady(u.telegram_id, minedSoFar);
+          notifyUserClaimReady(u.telegram_id, currentUnclaimed);
         }
       }
     }

@@ -23,6 +23,7 @@ export const WithdrawModal = ({
   const [amount, setAmount] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isPendingSuccess, setIsPendingSuccess] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedData, setSubmittedData] = useState(null);
 
   const NETWORK_FEE = 0.0; // 0 USDT fee
@@ -84,8 +85,9 @@ export const WithdrawModal = ({
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMsg('');
     setShowLockAlert(false);
 
@@ -136,7 +138,6 @@ export const WithdrawModal = ({
       return;
     }
 
-    triggerHaptic('success');
     const netAmount = Math.max(0, numAmount - NETWORK_FEE);
     const dateStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 
@@ -150,13 +151,26 @@ export const WithdrawModal = ({
       status: 'Pending'
     };
 
-    // Save submission data to show pending view
-    setSubmittedData(withdrawPayload);
-
-    // Call submit handler which updates balance, activities, transactions and locks address
-    onWithdrawSubmit(withdrawPayload);
-
-    setIsPendingSuccess(true);
+    try {
+      setIsSubmitting(true);
+      const res = await onWithdrawSubmit(withdrawPayload);
+      if (res && res.success) {
+        triggerHaptic('success');
+        setSubmittedData({
+          ...withdrawPayload,
+          ...(res.transaction || {})
+        });
+        setIsPendingSuccess(true);
+      } else {
+        triggerHaptic('error');
+        setErrorMsg(res?.message || (lang === 'bn' ? 'উইথড্র প্রক্রিয়াকরণে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।' : 'Failed to process withdrawal. Please try again.'));
+      }
+    } catch (err) {
+      triggerHaptic('error');
+      setErrorMsg(err.message || (lang === 'bn' ? 'সার্ভারে সংযোগ করতে সমস্যা হয়েছে।' : 'Network error submitting withdrawal.'));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const numAmount = parseFloat(amount) || 0;
@@ -460,9 +474,11 @@ export const WithdrawModal = ({
               </div>
             )}
 
-            <button type="submit" className="btn-submit-action blue">
+            <button type="submit" className="btn-submit-action blue" disabled={isSubmitting}>
               <ArrowUpFromLine size={16} />
-              {lang === 'bn' ? 'উইথড্র কনফার্ম করুন' : t.submitWithdraw}
+              {isSubmitting 
+                ? (lang === 'bn' ? 'প্রসেসিং হচ্ছে...' : 'Processing...') 
+                : (lang === 'bn' ? 'উইথড্র কনফার্ম করুন' : t.submitWithdraw)}
             </button>
           </form>
         )}

@@ -85,7 +85,17 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS has_notified_claim_001 BOOLEAN DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS has_notified_24h_stopped BOOLEAN DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS has_activated_referral BOOLEAN DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url VARCHAR(500) DEFAULT NULL;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS claimed_in_session NUMERIC(18, 8) DEFAULT 0.00000000;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE;
       ALTER TABLE referrals ADD COLUMN IF NOT EXISTS has_started_mining BOOLEAN DEFAULT FALSE;
+
+      -- System Settings Table (Persist Admin IDs and Bot State across server restarts)
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
 
       -- Migration: Default base daily mining rate to 0.0500 USDT
       ALTER TABLE users ALTER COLUMN daily_mining_rate SET DEFAULT 0.0500;
@@ -103,11 +113,17 @@ async function initDatabase() {
 
 // Helper: Get or Create user
 async function getOrCreateUser(userData) {
-  const { id, first_name = '', last_name = '', username = '', refCode = '' } = userData;
+  const { id, first_name = '', last_name = '', username = '', refCode = '', photo_url = null } = userData;
   const telegram_id = id.toString();
 
-  // Extract clean referral code (e.g. "ref_123456" -> "123456")
-  let cleanRef = (refCode || '').toString().replace(/^ref_?/, '').trim();
+  // Extract clean referral code (e.g. "ref_123456" -> "123456", or direct numeric ID)
+  let cleanRef = (refCode || '').toString().trim();
+  cleanRef = cleanRef.replace(/^(ref_|start_|invite_)/i, '').trim();
+  const digitsMatch = cleanRef.match(/\d{5,}/);
+  if (digitsMatch) {
+    cleanRef = digitsMatch[0];
+  }
+
   let validReferrer = null;
   if (cleanRef && cleanRef !== telegram_id) {
     const refCheck = await pool.query('SELECT telegram_id FROM users WHERE telegram_id = $1', [cleanRef]);
@@ -136,19 +152,24 @@ async function getOrCreateUser(userData) {
         await pool.query(
           `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username, has_started_mining)
            VALUES ($1, $2, $3, $4, FALSE)
-           ON CONFLICT (referred_id) DO NOTHING`,
+           ON CONFLICT (referred_id) DO UPDATE SET referrer_id = EXCLUDED.referrer_id`,
           [validReferrer, telegram_id, `${first_name} ${last_name}`.trim(), username]
         );
-        // Note: total_referrals is NOT incremented on /start. Only incremented when user starts mining!
       } catch (e) {
         console.error('Error linking referral for existing user:', e.message);
       }
     }
 
-    // Update name/username if changed
+    // Update name/username/photo_url if provided
     await pool.query(
-      `UPDATE users SET first_name = $1, last_name = $2, username = $3, last_active_at = NOW() WHERE telegram_id = $4`,
-      [first_name, last_name, username, telegram_id]
+      `UPDATE users 
+       SET first_name = COALESCE(NULLIF($1, ''), first_name),
+           last_name = COALESCE(NULLIF($2, ''), last_name),
+           username = COALESCE(NULLIF($3, ''), username),
+           photo_url = COALESCE($4, photo_url),
+           last_active_at = NOW() 
+       WHERE telegram_id = $5`,
+      [first_name, last_name, username, photo_url, telegram_id]
     );
 
     const refreshed = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegram_id]);
@@ -156,10 +177,10 @@ async function getOrCreateUser(userData) {
   }
 
   const insertRes = await pool.query(
-    `INSERT INTO users (telegram_id, first_name, last_name, username, referred_by)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO users (telegram_id, first_name, last_name, username, photo_url, referred_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [telegram_id, first_name, last_name, username, validReferrer]
+    [telegram_id, first_name, last_name, username, photo_url, validReferrer]
   );
 
   if (validReferrer) {
@@ -167,10 +188,9 @@ async function getOrCreateUser(userData) {
       await pool.query(
         `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username, has_started_mining)
          VALUES ($1, $2, $3, $4, FALSE)
-         ON CONFLICT (referred_id) DO NOTHING`,
+         ON CONFLICT (referred_id) DO UPDATE SET referrer_id = EXCLUDED.referrer_id`,
         [validReferrer, telegram_id, `${first_name} ${last_name}`.trim(), username]
       );
-      // Note: total_referrals is NOT incremented on /start. Only incremented when user starts mining!
     } catch (e) {
       console.error('Error recording referral:', e.message);
     }
@@ -201,8 +221,36 @@ async function getUserFullDetails(telegramId) {
     [tid]
   );
 
+  // Sync total_referrals count with actual referrals
+  const actualRefCount = refRes.rows.length;
+  const effectiveTotalRef = Math.max(Number(user.total_referrals || 0), actualRefCount);
+
+  // Calculate live unclaimed mined bonus
+  const now = Date.now();
+  const SESSION_MS = 24 * 60 * 60 * 1000;
+  let liveUnclaimed = Number(user.mined_unclaimed || 0);
+
+  if (user.is_mining_active && user.mining_started_at) {
+    const startTime = new Date(user.mining_started_at).getTime();
+    const elapsed = now - startTime;
+    const dailyRate = Number(user.daily_mining_rate || 0.05);
+    const claimedSoFar = Number(user.claimed_in_session || 0);
+
+    if (elapsed < SESSION_MS) {
+      const progress = Math.min(1, Math.max(0, elapsed / SESSION_MS));
+      const totalSoFar = dailyRate * progress;
+      liveUnclaimed += Math.max(0, totalSoFar - claimedSoFar);
+    } else {
+      // 24h cycle finished while offline
+      const remainingFromSession = Math.max(0, dailyRate - claimedSoFar);
+      liveUnclaimed += remainingFromSession;
+    }
+  }
+
   return {
     ...user,
+    total_referrals: effectiveTotalRef,
+    live_mined_unclaimed: Number(liveUnclaimed.toFixed(8)),
     transactions: txRes.rows,
     referrals: refRes.rows
   };
@@ -320,13 +368,17 @@ async function recordWithdrawalRequest({ telegramId, amount, address, network = 
   const tid = telegramId.toString();
   const numAmount = Number(amount);
 
-  // Check balance
-  const userRes = await pool.query('SELECT wallet_balance, withdraw_address, is_address_locked FROM users WHERE telegram_id = $1', [tid]);
+  // Check balance and ban status
+  const userRes = await pool.query('SELECT wallet_balance, withdraw_address, is_address_locked, is_banned FROM users WHERE telegram_id = $1', [tid]);
   if (userRes.rows.length === 0) {
     throw new Error('User not found');
   }
 
   const user = userRes.rows[0];
+  if (user.is_banned) {
+    throw new Error('আপনার অ্যাকাউন্টটি ব্যান করা হয়েছে! সাপোর্টে যোগাযোগ করুন।');
+  }
+
   if (Number(user.wallet_balance) < numAmount) {
     throw new Error('অপর্যাপ্ত ব্যালেন্স! (Insufficient withdrawable balance)');
   }
@@ -419,7 +471,7 @@ async function startUserMining(telegramId) {
   let userDetails = null;
 
   const userCheck = await pool.query(
-    'SELECT telegram_id, first_name, last_name, username, referred_by, has_activated_referral FROM users WHERE telegram_id = $1',
+    'SELECT telegram_id, first_name, last_name, username, referred_by, has_activated_referral, mined_unclaimed FROM users WHERE telegram_id = $1',
     [tid]
   );
 
@@ -455,11 +507,14 @@ async function startUserMining(telegramId) {
     }
   }
 
+  // Credit any uncollected balance from previous session to wallet_balance so it is never lost!
   const res = await pool.query(
     `UPDATE users 
-     SET mining_started_at = NOW(),
+     SET wallet_balance = wallet_balance + COALESCE(mined_unclaimed, 0),
+         mining_started_at = NOW(),
          is_mining_active = TRUE,
          mined_unclaimed = 0,
+         claimed_in_session = 0,
          has_notified_claim_001 = FALSE,
          has_notified_24h_stopped = FALSE,
          updated_at = NOW()
@@ -481,17 +536,66 @@ async function claimMinedReward(telegramId, amount, restart = false) {
   const amt = Number(amount);
   if (amt <= 0) throw new Error('Invalid claim amount');
 
-  const res = await pool.query(
-    `UPDATE users 
-     SET wallet_balance = wallet_balance + $1,
-         mined_unclaimed = 0,
-         is_mining_active = $2,
-         mining_started_at = CASE WHEN $2 = TRUE THEN NOW() ELSE NULL END,
-         updated_at = NOW()
-     WHERE telegram_id = $3
-     RETURNING *`,
-    [amt, restart, tid]
+  // Fetch current user state
+  const uRes = await pool.query(
+    'SELECT telegram_id, is_mining_active, mining_started_at, mined_unclaimed, claimed_in_session, daily_mining_rate FROM users WHERE telegram_id = $1',
+    [tid]
   );
+  if (uRes.rows.length === 0) throw new Error('User not found');
+  const user = uRes.rows[0];
+
+  const now = Date.now();
+  const SESSION_MS = 24 * 60 * 60 * 1000;
+  const startTime = user.mining_started_at ? new Date(user.mining_started_at).getTime() : null;
+  const elapsed = startTime ? (now - startTime) : SESSION_MS + 1;
+  const isStillInSession = user.is_mining_active && startTime && (elapsed < SESSION_MS);
+
+  let query = '';
+  let params = [];
+
+  if (restart) {
+    // Claim and restart fresh 24h mining cycle
+    query = `
+      UPDATE users 
+      SET wallet_balance = wallet_balance + $1,
+          mined_unclaimed = 0,
+          claimed_in_session = 0,
+          is_mining_active = TRUE,
+          mining_started_at = NOW(),
+          has_notified_claim_001 = FALSE,
+          has_notified_24h_stopped = FALSE,
+          updated_at = NOW()
+      WHERE telegram_id = $2
+      RETURNING *`;
+    params = [amt, tid];
+  } else if (isStillInSession) {
+    // Intermediate claim during active 24h mining: KEEP MINING RUNNING!
+    query = `
+      UPDATE users 
+      SET wallet_balance = wallet_balance + $1,
+          mined_unclaimed = GREATEST(0, mined_unclaimed - $1),
+          claimed_in_session = claimed_in_session + $1,
+          has_notified_claim_001 = FALSE,
+          updated_at = NOW()
+      WHERE telegram_id = $2
+      RETURNING *`;
+    params = [amt, tid];
+  } else {
+    // 24h session ended: claim reward and wait for user to start new cycle
+    query = `
+      UPDATE users 
+      SET wallet_balance = wallet_balance + $1,
+          mined_unclaimed = 0,
+          claimed_in_session = 0,
+          is_mining_active = FALSE,
+          mining_started_at = NULL,
+          updated_at = NOW()
+      WHERE telegram_id = $2
+      RETURNING *`;
+    params = [amt, tid];
+  }
+
+  const res = await pool.query(query, params);
 
   await addTransaction({
     telegramId: tid,
@@ -499,7 +603,7 @@ async function claimMinedReward(telegramId, amount, restart = false) {
     amount: amt,
     network: 'Internal',
     status: 'Completed',
-    note: '24-hour mining reward claimed to main wallet'
+    note: 'Mining reward claimed to main wallet'
   });
 
   return res.rows[0];
@@ -770,6 +874,70 @@ async function giftMiningPlanToUser({ telegramId, planId, planName, dailyProfit,
   return updateRes.rows[0];
 }
 
+// Helper: Get system setting from DB
+async function getSystemSetting(key, defaultValue = null) {
+  try {
+    const res = await pool.query('SELECT value FROM system_settings WHERE key = $1', [key]);
+    if (res.rows.length > 0) {
+      return res.rows[0].value;
+    }
+  } catch (err) {
+    // table may not exist yet during migration
+  }
+  return defaultValue;
+}
+
+// Helper: Set system setting in DB
+async function setSystemSetting(key, value) {
+  try {
+    const strVal = typeof value === 'string' ? value : JSON.stringify(value);
+    await pool.query(
+      `INSERT INTO system_settings (key, value, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (key) DO UPDATE
+       SET value = EXCLUDED.value, updated_at = NOW()`,
+      [key, strVal]
+    );
+  } catch (err) {
+    console.error('Error saving system setting:', err.message);
+  }
+}
+
+// Helper: Get all admin Telegram IDs (from system_settings and known admin usernames in users table)
+async function getAdminTelegramIds(authorizedUsernames = ['alhajbf2']) {
+  const ids = new Set();
+  try {
+    const rawVal = await getSystemSetting('admin_chat_ids');
+    if (rawVal) {
+      try {
+        const parsed = JSON.parse(rawVal);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(id => {
+            if (id && String(id).trim()) ids.add(String(id).trim());
+          });
+        }
+      } catch (e) {
+        if (rawVal.trim()) ids.add(rawVal.trim());
+      }
+    }
+
+    // Auto-resolve known admin usernames from users table
+    const cleanNames = authorizedUsernames.map(u => String(u || '').toLowerCase().replace('@', '').trim()).filter(Boolean);
+    if (cleanNames.length > 0) {
+      const uRes = await pool.query(
+        'SELECT telegram_id FROM users WHERE LOWER(username) = ANY($1)',
+        [cleanNames]
+      );
+      uRes.rows.forEach(r => {
+        if (r.telegram_id) ids.add(String(r.telegram_id).trim());
+      });
+    }
+  } catch (err) {
+    console.error('Error in getAdminTelegramIds:', err.message);
+  }
+  return Array.from(ids);
+}
+
 module.exports = {
   pool,
   initDatabase,
@@ -797,5 +965,8 @@ module.exports = {
   getAllUserTelegramIds,
   resetUserWithdrawAddress,
   adjustUserBalance,
-  giftMiningPlanToUser
+  giftMiningPlanToUser,
+  getSystemSetting,
+  setSystemSetting,
+  getAdminTelegramIds
 };

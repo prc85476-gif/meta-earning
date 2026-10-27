@@ -14,9 +14,11 @@ const {
   getUserTransactions,
   getAllUserTelegramIds,
   resetUserWithdrawAddress,
-  adjustUserBalance,
   giftMiningPlanToUser,
-  pool
+  pool,
+  getSystemSetting,
+  setSystemSetting,
+  getAdminTelegramIds
 } = require('./db');
 const { sendNotificationToUser, sendPhotoToUser, notifyUserWithdrawalApproved, postPaymentProofToChannel } = require('./bot');
 const {
@@ -56,14 +58,53 @@ function saveAdminSettings(settings) {
   } catch (e) {}
 }
 
+// In-memory cache of valid admin recipient chat IDs
+const cachedAdminChatIds = new Set();
+
+// Synchronously populate from ENV at startup
+[process.env.ADMIN_ID, process.env.ADMIN_IDS, process.env.ADMIN_CHAT_ID].forEach(envVal => {
+  if (envVal) {
+    String(envVal).split(/[,\s]+/).forEach(id => {
+      const clean = String(id || '').trim();
+      if (clean && /^\d+$/.test(clean)) cachedAdminChatIds.add(clean);
+    });
+  }
+});
+// Default known admin ID fallback
+cachedAdminChatIds.add('8829204942');
+
 function loadAdminChatIds() {
+  const list = new Set(cachedAdminChatIds);
   const data = loadAdminSettings();
-  const list = new Set();
   if (Array.isArray(data.adminChatIds)) {
-    data.adminChatIds.forEach(id => list.add(id));
+    data.adminChatIds.forEach(id => {
+      if (id) list.add(String(id).trim());
+    });
   }
   if (data.savedAdminChatId) {
-    list.add(data.savedAdminChatId);
+    list.add(String(data.savedAdminChatId).trim());
+  }
+  return Array.from(list);
+}
+
+// Async resolver: combines ENV, file, DB system_settings, and DB users table
+async function getEffectiveAdminChatIds() {
+  const list = new Set(loadAdminChatIds());
+  try {
+    const dbAdminIds = await getAdminTelegramIds(getAuthorizedAdmins());
+    dbAdminIds.forEach(id => {
+      if (id) {
+        const clean = String(id).trim();
+        list.add(clean);
+        cachedAdminChatIds.add(clean);
+      }
+    });
+  } catch (e) {
+    console.warn('Error reading admin IDs from DB:', e.message);
+  }
+
+  if (list.size === 0) {
+    list.add('8829204942');
   }
   return Array.from(list);
 }
@@ -71,12 +112,18 @@ function loadAdminChatIds() {
 function saveAdminChatId(id) {
   try {
     if (!id) return;
+    const cleanId = String(id).trim();
+    cachedAdminChatIds.add(cleanId);
+
     const data = loadAdminSettings();
-    const list = new Set(Array.isArray(data.adminChatIds) ? data.adminChatIds : []);
-    list.add(id);
+    const list = new Set(Array.isArray(data.adminChatIds) ? data.adminChatIds.map(String) : []);
+    list.add(cleanId);
     data.adminChatIds = Array.from(list);
-    data.savedAdminChatId = id; // keep backwards compatibility
+    data.savedAdminChatId = cleanId; // keep backwards compatibility
     saveAdminSettings(data);
+
+    // Persist to PostgreSQL system_settings asynchronously
+    setSystemSetting('admin_chat_ids', Array.from(list)).catch(() => {});
   } catch (e) {}
 }
 
@@ -145,6 +192,15 @@ function initAdminBot() {
 
     bot.getMe().then(me => {
       console.log(`🤖 Admin Bot @${me.username} connected. Authorized Admins: ${getAuthorizedAdmins().join(', ')}`);
+      // Warm up admin chat IDs from DB & ENV immediately
+      getEffectiveAdminChatIds().then(ids => {
+        ids.forEach(id => cachedAdminChatIds.add(id));
+        console.log(`🛡️  Admin Bot notification recipients ready: [${Array.from(cachedAdminChatIds).join(', ')}]`);
+        saveAdminSettings({
+          adminChatIds: Array.from(cachedAdminChatIds),
+          savedAdminChatId: Array.from(cachedAdminChatIds)[0]
+        });
+      }).catch(err => console.error('Warmup admin IDs error:', err.message));
     }).catch(err => console.error('Admin bot info error:', err.message));
 
     // Security check middleware: supports username (with/without @) and Telegram ID for all admins
@@ -2084,6 +2140,56 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
           bot.sendMessage(chatId, '❌ Failed to reset address: ' + err.message);
         }
       }
+
+      // 15. Ban User Account (`ban_user_<id>`)
+      if (data.startsWith('ban_user_')) {
+        const targetUserId = data.replace('ban_user_', '');
+        try {
+          await pool.query('UPDATE users SET is_banned = TRUE WHERE telegram_id = $1', [targetUserId]);
+          bot.answerCallbackQuery(query.id, { text: `🚫 User ${targetUserId} has been BANNED!`, show_alert: true }).catch(() => {});
+          bot.sendMessage(chatId, `🚫 *User Account Banned!*\n\nUser ID \`${targetUserId}\` has been banned. They cannot withdraw or claim mining rewards.`, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Unban Account', callback_data: `unban_user_${targetUserId}` },
+                  { text: '👤 View Profile', callback_data: `view_user_${targetUserId}` }
+                ],
+                [
+                  { text: '🔙 Dashboard', callback_data: 'admin_refresh' }
+                ]
+              ]
+            }
+          });
+        } catch (err) {
+          bot.sendMessage(chatId, '❌ Failed to ban user: ' + err.message);
+        }
+      }
+
+      // 16. Unban User Account (`unban_user_<id>`)
+      if (data.startsWith('unban_user_')) {
+        const targetUserId = data.replace('unban_user_', '');
+        try {
+          await pool.query('UPDATE users SET is_banned = FALSE WHERE telegram_id = $1', [targetUserId]);
+          bot.answerCallbackQuery(query.id, { text: `✅ User ${targetUserId} has been UNBANNED!`, show_alert: true }).catch(() => {});
+          bot.sendMessage(chatId, `✅ *User Account Unbanned!*\n\nUser ID \`${targetUserId}\` ban has been removed. Account restored to normal.`, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '🚫 Ban Account', callback_data: `ban_user_${targetUserId}` },
+                  { text: '👤 View Profile', callback_data: `view_user_${targetUserId}` }
+                ],
+                [
+                  { text: '🔙 Dashboard', callback_data: 'admin_refresh' }
+                ]
+              ]
+            }
+          });
+        } catch (err) {
+          bot.sendMessage(chatId, '❌ Failed to unban user: ' + err.message);
+        }
+      }
     });
 
     return bot;
@@ -2095,46 +2201,64 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 
 // Push notification: When any user requests a withdrawal (100% English)
 async function notifyAdminNewWithdrawal(withdrawalData) {
-  if (!adminBotInstance) return;
-
-  const adminChatIds = loadAdminChatIds();
-  if (adminChatIds.length === 0 && savedAdminChatId) {
-    adminChatIds.push(savedAdminChatId);
+  if (!adminBotInstance) {
+    console.warn('⚠️ Admin Bot instance not ready for withdrawal notification');
+    return;
   }
-  if (adminChatIds.length === 0) return;
+
+  const adminChatIds = await getEffectiveAdminChatIds();
+  if (adminChatIds.length === 0) {
+    console.warn('⚠️ No admin chat IDs found to send withdrawal notification!');
+    return;
+  }
 
   try {
     const grossAmount = Number(withdrawalData.amount || 0);
-    const hotBal = await getHotWalletBalances();
+    // Timeout race: do not let a slow BSC RPC block the Telegram alert to admin
+    let hotBal = { usdtBalance: '0.00', bnbBalance: '0.0000', isLowBnb: false, isLowUsdt: false };
+    try {
+      hotBal = await Promise.race([
+        getHotWalletBalances(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('RPC Timeout')), 3500))
+      ]);
+    } catch (e) {
+      console.warn('Hot wallet balance check timed out for withdrawal notification:', e.message);
+    }
     const canPay = parseFloat(hotBal.usdtBalance || 0) >= grossAmount;
 
     const escapeMdStr = (str) => String(str ?? '').replace(/[_*`\[\]]/g, '\\$&');
-    const fullName = escapeMdStr(`${withdrawalData.firstName || ''} ${withdrawalData.lastName || ''}`.trim()) || 'N/A';
-    const username = withdrawalData.username ? `@${escapeMdStr(withdrawalData.username)}` : 'N/A';
+    const rawUsername = (withdrawalData.username || '').replace(/^@/, '').trim();
+    const userHandle = rawUsername ? `@${escapeMdStr(rawUsername)}` : `@user_${withdrawalData.telegramId}`;
+    const fullName = escapeMdStr(`${withdrawalData.firstName || ''} ${withdrawalData.lastName || ''}`.trim()) || userHandle;
     const address = String(withdrawalData.address || '').replace(/[`\\]/g, '');
 
     const text = 
 `🚨 *NEW WITHDRAWAL REQUEST SUBMITTED!* 🚨\n` +
 `────────────────────────\n` +
+`👤 *User:* ${userHandle}\n` +
+`🆔 *UID:* \`${withdrawalData.telegramId}\`\n` +
+`📛 *Name:* ${fullName}\n` +
+`💰 *Withdrawable Balance:* \`$${Number(withdrawalData.walletBalance || 0).toFixed(4)} USDT\`\n` +
+`🛍 *NFT / Deposit Balance:* \`$${Number(withdrawalData.depositBalance || 0).toFixed(2)} USDT\`\n` +
+`💸 *Gross Withdrawal:* \`$${grossAmount.toFixed(4)} USDT\`\n` +
+`💵 *Net Payout to Send:* \`$${grossAmount.toFixed(4)} USDT\`\n` +
+`🔒 *Destination BEP20 Address:*\n\`${address}\`\n` +
+`👥 *Total Referrals:* \`${withdrawalData.totalReferrals || 0} Users\`\n` +
+`🔥 *Hot Wallet Balance:* \`$${hotBal.usdtBalance} USDT\` (${hotBal.bnbBalance} BNB)\n` +
+`⚡ *Hot Wallet Status:* ${canPay ? '🟢 Ready to Auto-Pay' : '⚠️ Top Up Needed'}\n` +
 `• 🆔 *Tx ID:* #${withdrawalData.id || 'N/A'}\n` +
-`• 👤 *User:* ${fullName} (${username})\n` +
-`• 🆔 *Telegram ID:* \`${withdrawalData.telegramId}\`\n` +
-`• 💰 *Current Wallet Balance:* \`$${Number(withdrawalData.walletBalance || 0).toFixed(4)} USDT\`\n` +
-`• 📥 *Deposit Balance:* \`$${Number(withdrawalData.depositBalance || 0).toFixed(2)} USDT\`\n` +
-`• 💸 *Gross Withdrawal:* \`$${grossAmount.toFixed(4)} USDT\`\n` +
-`• 💵 *Net Payout to Send:* \`$${grossAmount.toFixed(4)} USDT\`\n` +
-`• 🔒 *Destination BEP20 Address:*\n\`${address}\`\n` +
-`• 👥 *Total Referrals:* \`${withdrawalData.totalReferrals || 0}\`\n` +
-`• 🔥 *Hot Wallet Balance:* \`$${hotBal.usdtBalance} USDT\` (${hotBal.bnbBalance} BNB)\n` +
-`• ⚡ *Hot Wallet Status:* ${canPay ? '🟢 Ready to Auto-Pay' : '⚠️ Top Up Needed'}\n` +
 `• 📅 *Request Date:* ${withdrawalData.date || new Date().toLocaleString()}\n\n` +
-`Click below to approve instant on-chain payout from Hot Wallet or reject:`;
+`👇 *Choose an action below:*`;
 
     const buttons = {
       inline_keyboard: [
         [
           { text: '⚡ Approve & Auto-Payout', callback_data: `approve_wd_${withdrawalData.id}` },
           { text: '❌ Reject & Refund', callback_data: `reject_wd_${withdrawalData.id}` }
+        ],
+        [
+          { text: '🚫 Ban Account', callback_data: `ban_user_${withdrawalData.telegramId}` },
+          { text: '✅ Unban Account', callback_data: `unban_user_${withdrawalData.telegramId}` }
         ],
         [
           { text: '🔥 Check Hot Wallet', callback_data: 'admin_hot_wallet' },
@@ -2146,6 +2270,7 @@ async function notifyAdminNewWithdrawal(withdrawalData) {
       ]
     };
 
+    console.log(`📤 Sending withdrawal #${withdrawalData.id} alert to ${adminChatIds.length} admin(s): [${adminChatIds.join(', ')}]`);
     for (const cid of adminChatIds) {
       await adminBotInstance.sendMessage(cid, text, {
         parse_mode: 'Markdown',
@@ -2154,7 +2279,7 @@ async function notifyAdminNewWithdrawal(withdrawalData) {
         console.warn(`Fallback sending withdrawal alert to ${cid}:`, err.message);
         await adminBotInstance.sendMessage(cid, text.replace(/[*_`\[\]]/g, ''), {
           reply_markup: buttons
-        }).catch(() => {});
+        }).catch((e2) => console.error(`Failed to send withdrawal alert to admin ${cid}:`, e2.message));
       });
     }
   } catch (err) {
@@ -2162,53 +2287,70 @@ async function notifyAdminNewWithdrawal(withdrawalData) {
   }
 }
 
-// Push notification: When any user verifies a deposit (100% English)
+// Push notification: When any user verifies a deposit (Matches screenshot with BscScan card preview)
 async function notifyAdminNewDeposit(depositData) {
   if (!adminBotInstance) return;
 
-  const adminChatIds = loadAdminChatIds();
-  if (adminChatIds.length === 0 && savedAdminChatId) {
-    adminChatIds.push(savedAdminChatId);
-  }
+  const adminChatIds = await getEffectiveAdminChatIds();
   if (adminChatIds.length === 0) return;
 
   try {
     const escapeMdStr = (str) => String(str ?? '').replace(/[_*`\[\]]/g, '\\$&');
-    const fullName = escapeMdStr(`${depositData.firstName || ''} ${depositData.lastName || ''}`.trim()) || 'N/A';
-    const username = depositData.username ? `@${escapeMdStr(depositData.username)}` : 'N/A';
-    const refBy = depositData.referredBy ? escapeMdStr(depositData.referredBy) : 'Direct';
+    const rawUsername = (depositData.username || '').replace(/^@/, '').trim();
+    const userHandle = rawUsername ? `@${escapeMdStr(rawUsername)}` : `@user_${depositData.telegramId}`;
+    const fullName = escapeMdStr(`${depositData.firstName || ''} ${depositData.lastName || ''}`.trim()) || userHandle;
     const txHash = String(depositData.txHash || '').replace(/[`\\]/g, '');
+    const bscUrl = `https://bscscan.com/tx/${txHash}`;
+    const dateStr = depositData.date || (new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC');
 
     const text = 
-`📥 *NEW DEPOSIT VERIFIED & CREDITED!* 📥\n` +
+`📩 🚨 *NEW DEPOSIT ALERT!*\n` +
 `────────────────────────\n` +
-`• 👤 *User:* ${fullName} (${username})\n` +
-`• 🆔 *Telegram ID:* \`${depositData.telegramId}\`\n` +
-`• 💵 *Deposit Amount:* \`+$${Number(depositData.amount).toFixed(2)} USDT (BEP20)\`\n` +
-`• 💰 *New Deposit Balance:* \`$${Number(depositData.depositBalance || 0).toFixed(2)} USDT\`\n` +
-`• 💳 *Total Deposited All-Time:* \`$${Number(depositData.totalDeposit || 0).toFixed(2)} USDT\`\n` +
-`• 👥 *Referred By:* \`${refBy}\`\n` +
-`• 🔗 *BSCscan Transaction Hash:*\n\`${txHash}\`\n` +
-`• 📅 *Date:* ${depositData.date || new Date().toLocaleString()}`;
+`👤 *User:* ${userHandle}\n` +
+`🆔 *UID:* \`${depositData.telegramId}\`\n` +
+`📛 *Name:* ${fullName}\n` +
+`💰 *Deposit Amount:* \`+${Number(depositData.amount).toFixed(2)} USDT\`\n` +
+`🌐 *Network:* USDT BEP20\n` +
+`👥 *Total Referrals:* \`${depositData.totalReferrals || 0} Users\`\n` +
+`🛍 *NFT / Deposit Balance:* \`$${Number(depositData.depositBalance || 0).toFixed(2)} USDT\`\n` +
+`💎 *Withdrawable Balance:* \`$${Number(depositData.walletBalance || 0).toFixed(4)} USDT\`\n` +
+`📈 *Total Deposited:* \`$${Number(depositData.totalDeposit || 0).toFixed(2)} USDT\`\n` +
+`────────────────────────\n` +
+`• 🔗 *TXID:*\n\`${txHash}\`\n` +
+`• 🔍 *View on BscScan:*\n${bscUrl}\n` +
+`• 🟢 *Status:* ON-CHAIN VERIFIED & CREDITED\n` +
+`• ⏰ *Time:* ${dateStr}\n` +
+`────────────────────────\n` +
+`👇 *Choose an action below:*`;
 
     const buttons = {
       inline_keyboard: [
         [
+          { text: '🔍 View on BscScan', url: bscUrl }
+        ],
+        [
+          { text: '🚫 Ban Account', callback_data: `ban_user_${depositData.telegramId}` },
+          { text: '✅ Unban Account', callback_data: `unban_user_${depositData.telegramId}` }
+        ],
+        [
           { text: '👤 View User Profile', callback_data: `view_user_${depositData.telegramId}` },
-          { text: '🔗 View on BSCscan', url: `https://bscscan.com/tx/${depositData.txHash}` }
+          { text: '📜 User Tx History', callback_data: `user_tx_${depositData.telegramId}` }
         ]
       ]
     };
 
+    console.log(`📤 Sending deposit alert to ${adminChatIds.length} admin(s): [${adminChatIds.join(', ')}]`);
     for (const cid of adminChatIds) {
       await adminBotInstance.sendMessage(cid, text, {
         parse_mode: 'Markdown',
-        reply_markup: buttons
+        reply_markup: buttons,
+        disable_web_page_preview: false
       }).catch(async (err) => {
         console.warn(`Fallback sending deposit alert to ${cid}:`, err.message);
         await adminBotInstance.sendMessage(cid, text.replace(/[*_`\[\]]/g, ''), {
-          reply_markup: buttons
-        }).catch(() => {});
+          reply_markup: buttons,
+          disable_web_page_preview: false
+        }).catch((e2) => console.error(`Failed to send deposit alert to admin ${cid}:`, e2.message));
       });
     }
   } catch (err) {
