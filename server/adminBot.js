@@ -2312,12 +2312,12 @@ async function notifyAdminNewDeposit(depositData) {
 `💰 *Deposit Amount:* \`+${Number(depositData.amount).toFixed(2)} USDT\`\n` +
 `🌐 *Network:* USDT BEP20\n` +
 `👥 *Total Referrals:* \`${depositData.totalReferrals || 0} Users\`\n` +
-`🛍 *NFT / Deposit Balance:* \`$${Number(depositData.depositBalance || 0).toFixed(2)} USDT\`\n` +
-`💎 *Withdrawable Balance:* \`$${Number(depositData.walletBalance || 0).toFixed(4)} USDT\`\n` +
-`📈 *Total Deposited:* \`$${Number(depositData.totalDeposit || 0).toFixed(2)} USDT\`\n` +
+`🛍 *NFT / Deposit Balance:* \`${Number(depositData.depositBalance || 0).toFixed(2)} USDT\`\n` +
+`💎 *Withdrawable Balance:* \`${Number(depositData.walletBalance || 0).toFixed(4)} USDT\`\n` +
+`📈 *Total Deposited:* \`${Number(depositData.totalDeposit || 0).toFixed(2)} USDT\`\n` +
 `────────────────────────\n` +
 `• 🔗 *TXID:*\n\`${txHash}\`\n` +
-`• 🔍 *View on BscScan:*\n${bscUrl}\n` +
+`• 🔍 [View on BscScan](${bscUrl})\n` +
 `• 🟢 *Status:* ON-CHAIN VERIFIED & CREDITED\n` +
 `• ⏰ *Time:* ${dateStr}\n` +
 `────────────────────────\n` +
@@ -2333,8 +2333,8 @@ async function notifyAdminNewDeposit(depositData) {
           { text: '✅ Unban Account', callback_data: `unban_user_${depositData.telegramId}` }
         ],
         [
-          { text: '👤 View User Profile', callback_data: `view_user_${depositData.telegramId}` },
-          { text: '📜 User Tx History', callback_data: `user_tx_${depositData.telegramId}` }
+          { text: '👤 View Profile', callback_data: `view_user_${depositData.telegramId}` },
+          { text: '📜 Tx History', callback_data: `user_tx_${depositData.telegramId}` }
         ]
       ]
     };
