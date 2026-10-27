@@ -814,12 +814,26 @@ body {
 }
 
 .overview-box {
-  background: var(--bg-subtle);
-  border-radius: 6px;
-  padding: 10px 6px;
+  background: var(--bg-subtle, #f8fafc);
+  border-radius: 10px;
+  padding: 11px 6px;
   text-align: center;
   min-width: 0;
-  border: 1px solid #eef2f6;
+  border: 1.5px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+}
+
+.overview-box:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
+}
+
+.overview-box-highlight {
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%) !important;
+  border: 1.5px solid #10b981 !important;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.18) !important;
+  position: relative;
 }
 
 .overview-box-label {
@@ -834,6 +848,11 @@ body {
   display: block;
 }
 
+.overview-label-highlight {
+  color: #047857 !important;
+  font-weight: 800 !important;
+}
+
 .overview-box-val {
   font-family: var(--font-mono);
   font-size: 12.5px;
@@ -843,6 +862,12 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.overview-val-highlight {
+  color: #059669 !important;
+  font-weight: 900 !important;
+  font-size: 13.5px !important;
 }
 
 /* 2.5 RECENT ACTIVITY CARD - 100% Match with Reference */

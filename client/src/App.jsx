@@ -985,21 +985,23 @@ export function App() {
 
               <div className="overview-grid">
                 <div className="overview-box">
-                  <span className="overview-box-label">{t.mainBalance || 'Main Balance'}</span>
+                  <span className="overview-box-label">{lang === 'bn' ? 'মেইন ব্যালেন্স' : (t.mainBalance || 'Main Balance')}</span>
                   <div className="overview-box-val" style={{ color: '#0f172a' }}>
                     ${formatUSDT(walletBalance)}
                   </div>
                 </div>
 
-                <div className="overview-box">
-                  <span className="overview-box-label">{t.totalRefBonus || 'Total Ref Bonus'}</span>
-                  <div className="overview-box-val" style={{ color: '#2563eb' }}>
-                    +{formatUSDT(totalReferralBonus)} USDT
+                <div className="overview-box overview-box-highlight">
+                  <span className="overview-box-label overview-label-highlight">
+                    {lang === 'bn' ? 'ডিপোজিট ব্যালেন্স' : 'Deposit Balance'}
+                  </span>
+                  <div className="overview-box-val overview-val-highlight">
+                    {formatUSDT(depositBalance)} USDT
                   </div>
                 </div>
 
                 <div className="overview-box">
-                  <span className="overview-box-label">{t.totalWithdraw || 'Total Withdraw'}</span>
+                  <span className="overview-box-label">{lang === 'bn' ? 'মোট উইথড্র' : (t.totalWithdraw || 'Total Withdraw')}</span>
                   <div className="overview-box-val" style={{ color: '#10b981' }}>
                     {formatUSDT(totalWithdraw)} USDT
                   </div>
