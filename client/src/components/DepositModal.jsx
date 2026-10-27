@@ -15,12 +15,12 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { copyToClipboard } from '../utils/formatters';
-import { triggerHaptic } from '../utils/telegram';
+import { triggerHaptic, getTelegramUser } from '../utils/telegram';
 import usdtBep20Logo from '../assets/usdt-bep20-logo.jpg';
 
 const BEP20_ADDRESS = '0xf8e3Ea58EDB3719D934E1C2Bef4d160C1772FA81';
 
-export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang }) => {
+export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefilledAmount = 3, user }) => {
   const dialogRef = useRef(null);
   const [copied, setCopied] = useState(false);
   
@@ -124,13 +124,19 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang }) => {
 
   // Submit TxID and credit deposit via BSC backend on-chain verification
   const handleSubmitReceipt = async () => {
-    const rawTx = txId ? txId.trim() : '';
+    let rawTx = txId ? txId.trim() : '';
+    // Strip BSCScan or explorer URL if user pasted the full link
+    if (rawTx.includes('/tx/')) {
+      rawTx = rawTx.split('/tx/')[1].split(/[?#& ]/)[0];
+    }
+    rawTx = rawTx.replace(/['"<>]/g, '').trim();
+
     if (!rawTx || rawTx.length < 10) {
       triggerHaptic('warning');
       setTxError(
         lang === 'bn'
-          ? 'plz again deposit tangection id error: অনুগ্রহ করে সঠিক Transaction ID / Hash দিন।'
-          : 'plz again deposit tangection id error: Please enter a valid Transaction Hash / TxID.'
+          ? 'অনুগ্রহ করে সঠিক Transaction ID / Hash দিন।'
+          : 'Please enter a valid Transaction Hash / TxID.'
       );
       return;
     }
@@ -142,8 +148,8 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang }) => {
       triggerHaptic('warning');
       setTxError(
         lang === 'bn'
-          ? 'plz again deposit tangection id error: অবৈধ TxHash ফরম্যাট (অবশ্যই 66 সংখ্যার Hex কোড হতে হবে)।'
-          : 'plz again deposit tangection id error: Invalid TxHash format (must be 66 hex characters starting with 0x).'
+          ? 'অবৈধ TxHash ফরম্যাট (অবশ্যই 66 সংখ্যার Hex কোড হতে হবে)।'
+          : 'Invalid TxHash format (must be 66 hex characters starting with 0x).'
       );
       return;
     }
@@ -152,13 +158,23 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang }) => {
     setIsSubmittingTx(true);
     triggerHaptic('medium');
 
+    const tgUser = getTelegramUser();
+    const actualUserId = tgUser?.id ? String(tgUser.id) : (user?.id ? String(user.id) : '');
+    const actualUsername = tgUser?.username || user?.username || '';
+    const actualFirstName = tgUser?.first_name || user?.first_name || '';
+    const actualLastName = tgUser?.last_name || user?.last_name || '';
+
     try {
       const response = await fetch('/api/deposit/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           txHash: formattedTx,
-          userId: 'telegram_user'
+          userId: actualUserId,
+          telegramId: actualUserId,
+          username: actualUsername,
+          firstName: actualFirstName,
+          lastName: actualLastName
         })
       });
 
@@ -168,11 +184,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang }) => {
         setIsSubmittingTx(false);
         triggerHaptic('warning');
         const errDetail = data.message || 'Verification failed';
-        setTxError(
-          lang === 'bn'
-            ? `plz again deposit tangection id error (${errDetail})`
-            : `plz again deposit tangection id error (${errDetail})`
-        );
+        setTxError(errDetail);
         return;
       }
 
@@ -192,15 +204,15 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang }) => {
       } catch (e) {}
 
       if (onSimulateDeposit) {
-        onSimulateDeposit(verifiedAmount, formattedTx);
+        onSimulateDeposit(verifiedAmount, data.txHash || formattedTx, data);
       }
     } catch (err) {
       setIsSubmittingTx(false);
       triggerHaptic('warning');
       setTxError(
         lang === 'bn'
-          ? 'plz again deposit tangection id error (সার্ভার বা নেটওয়ার্ক সংযোগ সমস্যা)'
-          : 'plz again deposit tangection id error (Network or server connection failed)'
+          ? 'সার্ভার বা নেটওয়ার্ক সংযোগ সমস্যা। অনুগ্রহ করে আবার চেষ্টা করুন।'
+          : 'Network or server connection failed. Please try again.'
       );
     }
   };

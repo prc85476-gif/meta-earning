@@ -5,13 +5,16 @@ const path = require('path');
 const OFFICIAL_DEPOSIT_ADDRESS = '0xf8e3Ea58EDB3719D934E1C2Bef4d160C1772FA81'.toLowerCase();
 const USDT_BEP20_CONTRACT = '0x55d398326f99059fF775485246999027B3197955'.toLowerCase();
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-const MINIMUM_DEPOSIT_USDT = 3.0;
+const MINIMUM_DEPOSIT_USDT = 2.95; // Allow for slight exchange withdrawal fee deduction (so 3.00 is always accepted)
 
 // High-speed, official BSC RPC Endpoints with automatic fallback
 const BSC_RPC_ENDPOINTS = [
   'https://bsc-dataseed.binance.org',
   'https://bsc-dataseed1.binance.org',
   'https://bsc-dataseed2.binance.org',
+  'https://binance.llamarpc.com',
+  'https://rpc.ankr.com/bsc',
+  'https://1rpc.io/bnb',
   'https://bsc-dataseed1.defibit.io',
   'https://bsc.publicnode.com'
 ];
@@ -123,6 +126,12 @@ async function verifyBscDeposit({ txHash, userId }) {
   }
 
   let cleanHash = txHash.trim();
+  // Strip BSCScan or explorer URL if user pasted the full link
+  if (cleanHash.includes('/tx/')) {
+    cleanHash = cleanHash.split('/tx/')[1].split(/[?#& ]/)[0];
+  }
+  cleanHash = cleanHash.replace(/['"<>]/g, '').trim();
+
   if (!cleanHash.startsWith('0x')) {
     cleanHash = '0x' + cleanHash;
   }
@@ -167,16 +176,20 @@ async function verifyBscDeposit({ txHash, userId }) {
     console.warn('DB check in verifyBscDeposit notice:', dbErr.message);
   }
 
-  // 2. QUERY BSC BLOCKCHAIN RECEIPT
+  // 2. QUERY BSC BLOCKCHAIN RECEIPT (With automatic retry polling for just-submitted transfers)
   let receipt = null;
-  try {
-    receipt = await callBscRpc('eth_getTransactionReceipt', [cleanHash]);
-  } catch (err) {
-    return {
-      success: false,
-      code: 'RPC_FAILED',
-      message: `Failed to query BSC blockchain: ${err.message}. Please try again.`
-    };
+  const maxReceiptAttempts = 4;
+  for (let attempt = 1; attempt <= maxReceiptAttempts; attempt++) {
+    try {
+      receipt = await callBscRpc('eth_getTransactionReceipt', [cleanHash]);
+      if (receipt) break;
+    } catch (err) {
+      console.warn(`[verifyBscDeposit] Receipt query attempt ${attempt} notice:`, err.message);
+    }
+    if (attempt < maxReceiptAttempts) {
+      // Wait 2 seconds for block to be mined / propagated
+      await new Promise(r => setTimeout(r, 2000));
+    }
   }
 
   if (!receipt) {

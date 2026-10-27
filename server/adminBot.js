@@ -2206,6 +2206,49 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
   }
 }
 
+// Helper: Resolve real Telegram profile (checking args, PostgreSQL DB, and Telegram Bot API live)
+async function resolveRealTelegramProfile(telegramId, providedUsername, providedFirstName, providedLastName) {
+  let rawUsername = (providedUsername || '').replace(/^@/, '').trim();
+  let rawFirstName = (providedFirstName || '').trim();
+  let rawLastName = (providedLastName || '').trim();
+  const tid = String(telegramId || '').trim();
+
+  // 1. Check PostgreSQL users table if username is missing
+  if ((!rawUsername || rawUsername === 'null' || rawUsername === 'undefined') && tid && tid !== 'telegram_user') {
+    try {
+      const uRes = await pool.query('SELECT username, first_name, last_name FROM users WHERE telegram_id = $1', [tid]);
+      if (uRes.rows.length > 0) {
+        if (uRes.rows[0].username) rawUsername = uRes.rows[0].username.replace(/^@/, '').trim();
+        if (uRes.rows[0].first_name && !rawFirstName) rawFirstName = uRes.rows[0].first_name.trim();
+        if (uRes.rows[0].last_name && !rawLastName) rawLastName = uRes.rows[0].last_name.trim();
+      }
+    } catch (e) {}
+  }
+
+  // 2. Query Telegram Bot API live if still missing username
+  if ((!rawUsername || rawUsername === 'null' || rawUsername === 'undefined') && /^\d+$/.test(tid)) {
+    try {
+      if (adminBotInstance && adminBotInstance.getChat) {
+        const chat = await adminBotInstance.getChat(tid).catch(() => null);
+        if (chat) {
+          if (chat.username) {
+            rawUsername = chat.username.replace(/^@/, '').trim();
+            pool.query('UPDATE users SET username = $1 WHERE telegram_id = $2', [rawUsername, tid]).catch(() => {});
+          }
+          if (chat.first_name && !rawFirstName) rawFirstName = chat.first_name.trim();
+          if (chat.last_name && !rawLastName) rawLastName = chat.last_name.trim();
+        }
+      }
+    } catch (e) {}
+  }
+
+  return {
+    username: rawUsername,
+    firstName: rawFirstName,
+    lastName: rawLastName
+  };
+}
+
 // Push notification: When any user requests a withdrawal (100% English)
 async function notifyAdminNewWithdrawal(withdrawalData) {
   if (!adminBotInstance) {
@@ -2233,10 +2276,18 @@ async function notifyAdminNewWithdrawal(withdrawalData) {
     }
     const canPay = parseFloat(hotBal.usdtBalance || 0) >= grossAmount;
 
+    // Resolve accurate Telegram username
+    const profile = await resolveRealTelegramProfile(
+      withdrawalData.telegramId,
+      withdrawalData.username,
+      withdrawalData.firstName,
+      withdrawalData.lastName
+    );
+
     const escapeMdStr = (str) => String(str ?? '').replace(/[_*`\[\]]/g, '\\$&');
-    const rawUsername = (withdrawalData.username || '').replace(/^@/, '').trim();
-    const userHandle = rawUsername ? `@${escapeMdStr(rawUsername)}` : `@user_${withdrawalData.telegramId}`;
-    const fullName = escapeMdStr(`${withdrawalData.firstName || ''} ${withdrawalData.lastName || ''}`.trim()) || userHandle;
+    const rawUsername = profile.username;
+    const fullName = escapeMdStr(`${profile.firstName} ${profile.lastName}`.trim()) || (rawUsername ? `@${escapeMdStr(rawUsername)}` : `ID: \`${withdrawalData.telegramId}\``);
+    const userHandle = rawUsername ? `@${escapeMdStr(rawUsername)}` : (profile.firstName ? `${escapeMdStr(profile.firstName)} (ID: \`${withdrawalData.telegramId}\`)` : `ID: \`${withdrawalData.telegramId}\``);
     const address = String(withdrawalData.address || '').replace(/[`\\]/g, '');
 
     const text = 
@@ -2302,10 +2353,18 @@ async function notifyAdminNewDeposit(depositData) {
   if (adminChatIds.length === 0) return;
 
   try {
+    // Resolve accurate Telegram username
+    const profile = await resolveRealTelegramProfile(
+      depositData.telegramId,
+      depositData.username,
+      depositData.firstName,
+      depositData.lastName
+    );
+
     const escapeMdStr = (str) => String(str ?? '').replace(/[_*`\[\]]/g, '\\$&');
-    const rawUsername = (depositData.username || '').replace(/^@/, '').trim();
-    const userHandle = rawUsername ? `@${escapeMdStr(rawUsername)}` : `@user_${depositData.telegramId}`;
-    const fullName = escapeMdStr(`${depositData.firstName || ''} ${depositData.lastName || ''}`.trim()) || userHandle;
+    const rawUsername = profile.username;
+    const fullName = escapeMdStr(`${profile.firstName} ${profile.lastName}`.trim()) || (rawUsername ? `@${escapeMdStr(rawUsername)}` : `ID: \`${depositData.telegramId}\``);
+    const userHandle = rawUsername ? `@${escapeMdStr(rawUsername)}` : (profile.firstName ? `${escapeMdStr(profile.firstName)} (ID: \`${depositData.telegramId}\`)` : `ID: \`${depositData.telegramId}\``);
     const txHash = String(depositData.txHash || '').replace(/[`\\]/g, '');
     const bscUrl = `https://bscscan.com/tx/${txHash}`;
     const dateStr = depositData.date || (new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC');

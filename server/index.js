@@ -38,13 +38,13 @@ app.use(express.json());
 
 // Available Deposit Mining Power Plans ($3, $5, $20, $50, $100, $200, $500)
 const DEPOSIT_MINING_PLANS = [
-  { id: 'bronze-3', name: 'Bronze Mining Plan', price: 3, dailyProfit: 0.12, hashrate: '10.0 GH/s' },
-  { id: 'silver-5', name: 'Silver Mining Plan', price: 5, dailyProfit: 0.25, hashrate: '25.0 GH/s' },
-  { id: 'gold-20', name: 'Gold Mining Plan', price: 20, dailyProfit: 1.10, hashrate: '110.0 GH/s' },
-  { id: 'platinum-50', name: 'Platinum Power Plan', price: 50, dailyProfit: 3.00, hashrate: '300.0 GH/s' },
-  { id: 'diamond-100', name: 'Diamond VIP Plan', price: 100, dailyProfit: 6.50, hashrate: '680.0 GH/s' },
-  { id: 'titanium-200', name: 'Titanium Master Plan', price: 200, dailyProfit: 14.00, hashrate: '1,500 GH/s' },
-  { id: 'quantum-500', name: 'Quantum Ultra Plan', price: 500, dailyProfit: 38.00, hashrate: '4,200 GH/s' }
+  { id: 'plan_3', alias: 'bronze-3', name: 'Starter Power Plan', price: 3, dailyProfit: 0.30, hashrate: '5.0 GH/s' },
+  { id: 'plan_5', alias: 'silver-5', name: 'Basic Turbo Plan', price: 5, dailyProfit: 0.55, hashrate: '10.0 GH/s' },
+  { id: 'plan_20', alias: 'gold-20', name: 'Silver Booster Plan', price: 20, dailyProfit: 2.40, hashrate: '45.0 GH/s' },
+  { id: 'plan_50', alias: 'platinum-50', name: 'Gold Mining Ultra Plan', price: 50, dailyProfit: 6.50, hashrate: '120.0 GH/s' },
+  { id: 'plan_100', alias: 'diamond-100', name: 'Platinum Hashrate VIP', price: 100, dailyProfit: 14.00, hashrate: '300.0 GH/s' },
+  { id: 'plan_200', alias: 'titanium-200', name: 'Diamond VIP Cloud', price: 200, dailyProfit: 30.00, hashrate: '650.0 GH/s' },
+  { id: 'plan_500', alias: 'quantum-500', name: 'Ultimate Whale Core', price: 500, dailyProfit: 85.00, hashrate: '1,800 GH/s' }
 ];
 
 app.get('/api/plans', (req, res) => {
@@ -222,7 +222,7 @@ app.post('/api/claim', async (req, res) => {
 
 // Process BSC Blockchain Real Deposit Verification & Credit to Neon DB
 app.post('/api/deposit/verify', async (req, res) => {
-  const { userId, txHash } = req.body;
+  const { userId, telegramId, txHash, username, firstName, lastName } = req.body;
 
   if (!txHash) {
     return res.status(400).json({
@@ -233,7 +233,16 @@ app.post('/api/deposit/verify', async (req, res) => {
   }
 
   try {
-    const actualUserId = (userId || '987654321').toString();
+    const rawId = (userId && userId !== 'telegram_user' ? userId : telegramId) || '';
+    const actualUserId = String(rawId).trim();
+
+    if (!actualUserId || actualUserId === 'telegram_user') {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_USER_ID',
+        message: 'Valid Telegram User ID is required.'
+      });
+    }
 
     // 1. Verify on BSC Blockchain
     const result = await verifyBscDeposit({
@@ -245,8 +254,13 @@ app.post('/api/deposit/verify', async (req, res) => {
       return res.status(400).json(result);
     }
 
-    // 2. Ensure user exists in Neon DB
-    await getOrCreateUser({ id: actualUserId });
+    // 2. Ensure user exists in Neon DB with provided user profile
+    await getOrCreateUser({
+      id: actualUserId,
+      username: username || '',
+      first_name: firstName || 'Miner',
+      last_name: lastName || ''
+    });
 
     // 3. Record in Neon DB (Credits Deposit Balance & 10% Referrer commission)
     const updatedUser = await recordVerifiedDeposit({
@@ -256,14 +270,19 @@ app.post('/api/deposit/verify', async (req, res) => {
       network: 'BEP20 (BSC)'
     });
 
-    // Send Instant Push Alert to Admin Bot (@alhajbf2)
+    // Send Instant Push Alert to Admin Bot
     try {
+      const fullUser = await getUserFullDetails(actualUserId);
+      const realUname = fullUser?.username || updatedUser.username || username || '';
+      const realFName = fullUser?.first_name || updatedUser.first_name || firstName || '';
+      const realLName = fullUser?.last_name || updatedUser.last_name || lastName || '';
+
       await notifyAdminNewDeposit({
         txHash: result.txHash,
         telegramId: actualUserId,
-        username: updatedUser.username,
-        firstName: updatedUser.first_name,
-        lastName: updatedUser.last_name,
+        username: realUname,
+        firstName: realFName,
+        lastName: realLName,
         amount: result.amount,
         depositBalance: updatedUser.deposit_balance,
         walletBalance: updatedUser.wallet_balance,
@@ -314,8 +333,9 @@ app.post('/api/deposit/verify', async (req, res) => {
 // Process Withdraw (Deducts Main Balance, locks Address, Pending Status)
 app.post('/api/withdraw', async (req, res) => {
   try {
-    const { userId, amount, address, network } = req.body;
-    const actualUserId = (userId || '987654321').toString();
+    const { userId, telegramId, amount, address, network, username, firstName, lastName } = req.body;
+    const rawId = (userId && userId !== 'telegram_user' ? userId : telegramId) || '';
+    const actualUserId = String(rawId || '987654321').trim();
     const numAmount = parseFloat(amount);
 
     if (isNaN(numAmount) || numAmount < 0.1) {
@@ -341,7 +361,12 @@ app.post('/api/withdraw', async (req, res) => {
       });
     }
 
-    await getOrCreateUser({ id: actualUserId });
+    await getOrCreateUser({
+      id: actualUserId,
+      username: username || '',
+      first_name: firstName || 'Miner',
+      last_name: lastName || ''
+    });
 
     console.log(`[WITHDRAW] Processing withdrawal: user=${actualUserId}, amount=${numAmount}, address=${address}`);
 
@@ -367,12 +392,17 @@ app.post('/api/withdraw', async (req, res) => {
 
     // 2. Send Instant Push Alert to Admin Bot with Approve & Reject buttons
     try {
+      const fullUser = await getUserFullDetails(actualUserId);
+      const realUname = fullUser?.username || user.username || username || '';
+      const realFName = fullUser?.first_name || user.first_name || firstName || '';
+      const realLName = fullUser?.last_name || user.last_name || lastName || '';
+
       await notifyAdminNewWithdrawal({
         id: transaction.id,
         telegramId: actualUserId,
-        username: user.username,
-        firstName: user.first_name,
-        lastName: user.last_name,
+        username: realUname,
+        firstName: realFName,
+        lastName: realLName,
         amount: numAmount,
         address,
         walletBalance: user.wallet_balance,
@@ -404,10 +434,20 @@ app.post('/api/withdraw', async (req, res) => {
 // Buy Power Plan with Deposit Balance
 app.post('/api/plans/buy', async (req, res) => {
   try {
-    const { userId, planId } = req.body;
-    const actualUserId = (userId || '987654321').toString();
+    const { userId, telegramId, planId } = req.body;
+    const rawId = (userId && userId !== 'telegram_user' ? userId : telegramId) || '';
+    const actualUserId = String(rawId || '987654321').trim();
 
-    const plan = DEPOSIT_MINING_PLANS.find(p => p.id === planId);
+    const cleanPlanId = String(planId || '').toLowerCase().trim();
+    // Support matching by id, alias, plan_X, or price
+    const plan = DEPOSIT_MINING_PLANS.find(p => 
+      p.id.toLowerCase() === cleanPlanId ||
+      p.alias?.toLowerCase() === cleanPlanId ||
+      cleanPlanId.endsWith(`-${p.price}`) ||
+      cleanPlanId === `plan_${p.price}` ||
+      p.price === Number(cleanPlanId.replace(/[^0-9]/g, ''))
+    );
+
     if (!plan) {
       return res.status(400).json({ success: false, message: 'প্ল্যানটি খুঁজে পাওয়া যায়নি।' });
     }

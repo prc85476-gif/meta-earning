@@ -20,7 +20,10 @@ export function App() {
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [depositPreloadedAmount, setDepositPreloadedAmount] = useState(2);
   const [currentTab, setCurrentTab] = useState('mining');
-  const [user, setUser] = useState({ id: '987654321', first_name: 'Mining User', username: 'miner_bd' });
+  const [user, setUser] = useState(() => {
+    const tg = getTelegramUser();
+    return tg || { id: '987654321', first_name: 'Mining User', username: 'miner_bd' };
+  });
 
   // Balances
   const [walletBalance, setWalletBalance] = useState(() => {
@@ -646,26 +649,51 @@ export function App() {
   };
 
   // Handle verified BSC deposit
-  const handleSimulateDeposit = (amt = 10, txHash = '') => {
+  const handleSimulateDeposit = async (amt = 3, txHash = '', serverData = null) => {
+    const tgUser = getTelegramUser();
+    const actualUserId = tgUser?.id ? String(tgUser.id) : (user?.id ? String(user.id) : '987654321');
+
     // 1. DEPOSIT CREDITS TO 'DEPOSIT BALANCE' ONLY (Locked in mining, NOT directly withdrawable!)
-    let updatedDepositBal = depositBalance + amt;
+    let updatedDepositBal = serverData && serverData.depositBalance !== undefined
+      ? Number(serverData.depositBalance)
+      : depositBalance + amt;
+
+    let updatedTotalDeposit = serverData && serverData.totalDeposit !== undefined
+      ? Number(serverData.totalDeposit)
+      : totalInvestment + amt;
+
     setDepositBalance(updatedDepositBal);
-    setTotalInvestment((prev) => prev + amt);
+    setTotalInvestment(updatedTotalDeposit);
+    localStorage.setItem('usdt_deposit_balance', updatedDepositBal.toString());
+    localStorage.setItem('usdt_total_investment', updatedTotalDeposit.toString());
 
     // Check if user clicked to purchase a pending plan
     let activatedPlanName = '';
     let targetPlan = pendingPlanToActivate;
 
     if (targetPlan && updatedDepositBal >= targetPlan.price) {
-      // Deduct the plan price from depositBalance!
-      updatedDepositBal = Math.max(0, updatedDepositBal - targetPlan.price);
-      setDepositBalance(updatedDepositBal);
-      localStorage.setItem('usdt_deposit_balance', updatedDepositBal.toString());
-
-      if (!purchasedPlanIds.includes(targetPlan.id)) {
-        const nextPurchased = [...purchasedPlanIds, targetPlan.id];
-        setPurchasedPlanIds(nextPurchased);
-        activatedPlanName = targetPlan.name;
+      try {
+        const buyRes = await fetch('/api/plans/buy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: actualUserId,
+            telegramId: actualUserId,
+            planId: targetPlan.id
+          })
+        });
+        const buyData = await buyRes.json();
+        if (buyData.success && buyData.user) {
+          updatedDepositBal = Number(buyData.user.deposit_balance);
+          setDepositBalance(updatedDepositBal);
+          localStorage.setItem('usdt_deposit_balance', updatedDepositBal.toString());
+          if (Array.isArray(buyData.user.purchased_plans)) {
+            setPurchasedPlanIds(buyData.user.purchased_plans);
+          }
+          activatedPlanName = targetPlan.name;
+        }
+      } catch (err) {
+        console.error('Error auto-purchasing plan after deposit:', err);
       }
       setPendingPlanToActivate(null);
     }
@@ -694,63 +722,82 @@ export function App() {
     if (activatedPlanName) {
       showToast(
         lang === 'bn' 
-          ? `+${amt.toFixed(2)} USDT ডিপোজিট হয়েছে ও ${activatedPlanName} চালু হয়েছে! (অবশিষ্ট ডিপোজিট ব্যালেন্স: $${updatedDepositBal.toFixed(2)})` 
-          : `+${amt.toFixed(2)} USDT deposited & ${activatedPlanName} activated! (Deposit Balance: $${updatedDepositBal.toFixed(2)})`
+          ? `+${amt.toFixed(2)} USDT ডিপোজিট হয়েছে ও ${activatedPlanName} চালু হয়েছে!` 
+          : `+${amt.toFixed(2)} USDT deposited & ${activatedPlanName} activated!`
       );
     } else {
       showToast(
         lang === 'bn' 
-          ? `+${amt.toFixed(2)} USDT ডিপোজিট ব্যালেন্সে (Deposit Balance) সফলভাবে জমা হয়েছে!` 
+          ? `+${amt.toFixed(2)} USDT ডিপোজিট ব্যালেন্সে সফলভাবে জমা হয়েছে!` 
           : `+${amt.toFixed(2)} USDT credited to Deposit Balance!`
       );
     }
+
+    syncWithDb(false);
   };
 
   // Buy/activate deposit mining power plan using DEPOSIT BALANCE ONLY (Main Balance cannot be used!)
-  const handleSelectDepositPlan = (plan) => {
+  const handleSelectDepositPlan = async (plan) => {
+    const tgUser = getTelegramUser();
+    const actualUserId = tgUser?.id ? String(tgUser.id) : (user?.id ? String(user.id) : '987654321');
+
     // Only deposit balance can be used to buy plans
     if (depositBalance >= plan.price) {
-      // Deduct/Minus plan price from Deposit Balance
-      const remainingDeposit = Math.max(0, depositBalance - plan.price);
-      setDepositBalance(remainingDeposit);
-      localStorage.setItem('usdt_deposit_balance', remainingDeposit.toString());
+      try {
+        const response = await fetch('/api/plans/buy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: actualUserId,
+            telegramId: actualUserId,
+            planId: plan.id
+          })
+        });
 
-      if (!purchasedPlanIds.includes(plan.id)) {
-        const nextPurchased = [...purchasedPlanIds, plan.id];
-        setPurchasedPlanIds(nextPurchased);
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          showToast(data.message || (lang === 'bn' ? 'প্ল্যান কেনার সময় সমস্যা হয়েছে।' : 'Failed to purchase plan'));
+          return;
+        }
+
+        const remainingDeposit = data.user?.deposit_balance !== undefined
+          ? Number(data.user.deposit_balance)
+          : Math.max(0, depositBalance - plan.price);
+
+        setDepositBalance(remainingDeposit);
+        localStorage.setItem('usdt_deposit_balance', remainingDeposit.toString());
+
+        if (Array.isArray(data.user?.purchased_plans)) {
+          setPurchasedPlanIds(data.user.purchased_plans);
+        } else if (!purchasedPlanIds.includes(plan.id)) {
+          setPurchasedPlanIds([...purchasedPlanIds, plan.id]);
+        }
+
+        const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        setTransactions((prev) => [
+          {
+            type: 'deposit_plan',
+            amount: plan.price,
+            network: 'Deposit Balance',
+            date: timeStr,
+            status: 'Active'
+          },
+          ...prev
+        ]);
+
+        showToast(
+          lang === 'bn' 
+            ? `${plan.name} ($${plan.price}) কেনা হয়েছে! ডিপোজিট ব্যালেন্স থেকে -$${plan.price} কাটা হয়েছে।` 
+            : `${plan.name} ($${plan.price}) purchased! -$${plan.price} deducted from Deposit Balance.`
+        );
+
+        syncWithDb(false);
+      } catch (err) {
+        console.error('Error buying plan:', err);
+        showToast(lang === 'bn' ? 'সার্ভারে সংযোগ করতে সমস্যা হয়েছে।' : 'Network error purchasing plan');
       }
-
-      const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-      setTransactions((prev) => [
-        {
-          type: 'deposit_plan',
-          amount: plan.price,
-          network: 'Deposit Balance',
-          date: timeStr,
-          status: 'Active'
-        },
-        ...prev
-      ]);
-
-      const newDaily = (totalDailyEarning + plan.dailyProfit).toFixed(3);
-      showToast(
-        lang === 'bn' 
-          ? `${plan.name} ($${plan.price}) কেনা হয়েছে! ডিপোজিট ব্যালেন্স থেকে -$${plan.price} কাটা হয়েছে। (অবশিষ্ট: $${remainingDeposit.toFixed(2)})` 
-          : `${plan.name} ($${plan.price}) purchased! -$${plan.price} deducted from Deposit Balance. (Remaining: $${remainingDeposit.toFixed(2)})`
-      );
-
-      // Sync plan purchase to Neon PostgreSQL Database
-      fetch('/api/plans/buy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user?.id || '987654321',
-          planId: plan.id
-        })
-      }).catch(err => console.log('Notice saving plan purchase to DB:', err.message));
     } else {
       // Insufficient deposit balance - Main balance is NOT permitted for plans
-      const needed = Math.max(3, plan.price - depositBalance);
       setPendingPlanToActivate(plan);
       setDepositPreloadedAmount(plan.price);
       setIsDepositOpen(true);
@@ -762,12 +809,14 @@ export function App() {
     }
   };
 
-
   // Handle user withdrawal submission (Pending in account history)
   const handleWithdrawSubmit = async ({ address, amount, network, netAmount, fee }) => {
     const numAmount = parseFloat(amount);
     const tgUser = getTelegramUser();
     const actualUserId = tgUser?.id ? String(tgUser.id) : (user?.id ? String(user.id) : '987654321');
+    const actualUsername = tgUser?.username || user?.username || '';
+    const actualFirstName = tgUser?.first_name || user?.first_name || '';
+    const actualLastName = tgUser?.last_name || user?.last_name || '';
 
     try {
       const response = await fetch('/api/withdraw', {
@@ -775,6 +824,10 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: actualUserId,
+          telegramId: actualUserId,
+          username: actualUsername,
+          firstName: actualFirstName,
+          lastName: actualLastName,
           amount: numAmount,
           address,
           network: network || 'BEP20'
@@ -998,6 +1051,7 @@ export function App() {
         onSimulateDeposit={handleSimulateDeposit}
         lang={lang}
         prefilledAmount={depositPreloadedAmount}
+        user={user}
       />
 
       <WithdrawModal
