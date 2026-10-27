@@ -146,6 +146,27 @@ async function verifyBscDeposit({ txHash, userId }) {
     };
   }
 
+  // 1b. Check PostgreSQL database directly (persists across restarts and container redeploys)
+  try {
+    const { pool } = require('./db');
+    if (pool) {
+      const dbCheck = await pool.query(
+        'SELECT id FROM transactions WHERE LOWER(tx_hash) = $1 LIMIT 1',
+        [normalizedHash]
+      );
+      if (dbCheck.rows && dbCheck.rows.length > 0) {
+        markTransactionAsUsed(normalizedHash, { reused: true });
+        return {
+          success: false,
+          code: 'ALREADY_USED',
+          message: 'This Transaction ID has already been claimed and credited! (এক ট্রানজেকশন আইডি ২ বার ব্যবহার করা যাবে না)'
+        };
+      }
+    }
+  } catch (dbErr) {
+    console.warn('DB check in verifyBscDeposit notice:', dbErr.message);
+  }
+
   // 2. QUERY BSC BLOCKCHAIN RECEIPT
   let receipt = null;
   try {

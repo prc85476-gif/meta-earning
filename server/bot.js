@@ -306,6 +306,13 @@ function initTelegramBot(webappUrl) {
     mainUserBotInstance = bot;
     console.log('🚀 Telegram Bot is running in polling mode with Neon DB integration...');
 
+    bot.on('polling_error', (error) => {
+      if (error.code === 'ETELEGRAM' && String(error.message).includes('409')) {
+        return; // rolling restart handover
+      }
+      console.warn(`[UserBot Polling] ${error.message || error}`);
+    });
+
     botUsername = 'Meta_Farming_bot';
     bot.getMe().then(me => {
       if (me && me.username) {
@@ -373,20 +380,22 @@ function initTelegramBot(webappUrl) {
       ]
     });
 
-    // /start command: Record User & Referral, then ask to Select Language
+    // /start command: High-throughput concurrent handler for 100k daily users
     bot.onText(/\/start(.*)/, async (msg, match) => {
       const chatId = msg.chat.id;
       const tgUser = msg.from || {};
       const refCode = match[1] ? match[1].trim() : '';
 
       try {
-        // Save or update user in Neon PostgreSQL Database and track referral
-        await getOrCreateUser({
+        // Kick off user persistence asynchronously via single-roundtrip UPSERT
+        const syncPromise = getOrCreateUser({
           id: tgUser.id || chatId,
           first_name: tgUser.first_name || 'Miner',
           last_name: tgUser.last_name || '',
           username: tgUser.username || '',
           refCode
+        }).catch(err => {
+          console.warn('Async user sync notice on /start:', err.message);
         });
 
         // Language selection keyboard (2 per row)
@@ -403,6 +412,12 @@ function initTelegramBot(webappUrl) {
 
         const langPrompt = `🌐 *Please select your language:*`;
 
+        // Ensure user sync doesn't block Telegram UI response even during high traffic
+        await Promise.race([
+          syncPromise,
+          new Promise(r => setTimeout(r, 1200))
+        ]);
+
         await bot.sendMessage(chatId, langPrompt, {
           parse_mode: 'Markdown',
           reply_markup: {
@@ -410,7 +425,7 @@ function initTelegramBot(webappUrl) {
           }
         });
       } catch (error) {
-        console.error('Bot /start error:', error);
+        console.error('Bot /start error:', error.message);
         bot.sendMessage(chatId, `🌐 *Please select your language:*`, {
           parse_mode: 'Markdown',
           reply_markup: {
@@ -418,7 +433,7 @@ function initTelegramBot(webappUrl) {
               [{ text: '🇬🇧 English', callback_data: 'lang_en' }]
             ]
           }
-        });
+        }).catch(() => {});
       }
     });
 

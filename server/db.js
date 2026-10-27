@@ -8,9 +8,9 @@ const pool = new Pool({
   ssl: {
     rejectUnauthorized: false
   },
-  max: 10,
+  max: 25,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000
+  connectionTimeoutMillis: 5000
 });
 
 pool.on('error', (err) => {
@@ -73,11 +73,14 @@ async function initDatabase() {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
-      -- Indexes for high-speed queries
+      -- High-Speed & Security Indexes
       CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(telegram_id);
       CREATE INDEX IF NOT EXISTS idx_transactions_tx_hash ON transactions(tx_hash);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_tx_hash_unique ON transactions(LOWER(tx_hash)) WHERE tx_hash IS NOT NULL AND tx_hash != '';
       CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
       CREATE INDEX IF NOT EXISTS idx_users_withdraw_addr ON users(withdraw_address);
+      CREATE INDEX IF NOT EXISTS idx_users_mining_active ON users(is_mining_active, mining_started_at) WHERE is_mining_active = TRUE;
+      CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by);
 
       -- Migration: 24h mining session tracking & activation
       ALTER TABLE users ADD COLUMN IF NOT EXISTS mining_started_at TIMESTAMP WITH TIME ZONE DEFAULT NULL;
@@ -111,10 +114,20 @@ async function initDatabase() {
   }
 }
 
-// Helper: Get or Create user
+// High-performance bounded in-memory cache for fast user resolution on /start (100k daily scale)
+const activeUserCache = new Map();
+
+// Helper: Get or Create user (Atomic high-speed UPSERT)
 async function getOrCreateUser(userData) {
   const { id, first_name = '', last_name = '', username = '', refCode = '', photo_url = null } = userData;
   const telegram_id = id.toString();
+
+  // Fast-path: If user was synced within the last 30 seconds and no referral code is passed, quick return
+  const now = Date.now();
+  const cached = activeUserCache.get(telegram_id);
+  if (cached && (now - cached.time < 30000) && !refCode) {
+    return cached.user;
+  }
 
   // Extract clean referral code (e.g. "ref_123456" -> "123456", or direct numeric ID)
   let cleanRef = (refCode || '').toString().trim();
@@ -126,77 +139,51 @@ async function getOrCreateUser(userData) {
 
   let validReferrer = null;
   if (cleanRef && cleanRef !== telegram_id) {
-    const refCheck = await pool.query('SELECT telegram_id FROM users WHERE telegram_id = $1', [cleanRef]);
-    if (refCheck.rows.length > 0) {
-      validReferrer = cleanRef;
-    } else if (/^\d+$/.test(cleanRef)) {
-      // Auto-create placeholder for referrer if not yet created so referral is never lost
-      await pool.query(
-        `INSERT INTO users (telegram_id, first_name, username) VALUES ($1, 'Referrer', 'user') ON CONFLICT DO NOTHING`,
-        [cleanRef]
-      );
-      validReferrer = cleanRef;
-    }
+    validReferrer = cleanRef;
   }
 
-  const selectRes = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegram_id]);
-  if (selectRes.rows.length > 0) {
-    const existing = selectRes.rows[0];
-    // If user already existed without a referrer and now provided a valid referrer, link them!
-    if (!existing.referred_by && validReferrer) {
-      await pool.query(
-        `UPDATE users SET referred_by = $1 WHERE telegram_id = $2`,
-        [validReferrer, telegram_id]
-      );
-      try {
-        await pool.query(
-          `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username, has_started_mining)
-           VALUES ($1, $2, $3, $4, FALSE)
-           ON CONFLICT (referred_id) DO UPDATE SET referrer_id = EXCLUDED.referrer_id`,
-          [validReferrer, telegram_id, `${first_name} ${last_name}`.trim(), username]
-        );
-      } catch (e) {
-        console.error('Error linking referral for existing user:', e.message);
-      }
-    }
+  // Single-query Atomic UPSERT: Handles insertion, update, and referral linking in ONE round-trip!
+  const query = `
+    INSERT INTO users (telegram_id, first_name, last_name, username, photo_url, referred_by)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (telegram_id) DO UPDATE SET
+      first_name = COALESCE(NULLIF(EXCLUDED.first_name, ''), users.first_name),
+      last_name = COALESCE(NULLIF(EXCLUDED.last_name, ''), users.last_name),
+      username = COALESCE(NULLIF(EXCLUDED.username, ''), users.username),
+      photo_url = COALESCE(EXCLUDED.photo_url, users.photo_url),
+      referred_by = COALESCE(users.referred_by, EXCLUDED.referred_by),
+      last_active_at = NOW()
+    RETURNING *`;
 
-    // Update name/username/photo_url if provided
-    await pool.query(
-      `UPDATE users 
-       SET first_name = COALESCE(NULLIF($1, ''), first_name),
-           last_name = COALESCE(NULLIF($2, ''), last_name),
-           username = COALESCE(NULLIF($3, ''), username),
-           photo_url = COALESCE($4, photo_url),
-           last_active_at = NOW() 
-       WHERE telegram_id = $5`,
-      [first_name, last_name, username, photo_url, telegram_id]
-    );
+  const res = await pool.query(query, [
+    telegram_id,
+    first_name || 'Miner',
+    last_name || '',
+    username || '',
+    photo_url,
+    validReferrer
+  ]);
 
-    const refreshed = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegram_id]);
-    return refreshed.rows[0];
+  const user = res.rows[0];
+
+  // Cache user object
+  activeUserCache.set(telegram_id, { time: now, user });
+  if (activeUserCache.size > 20000) {
+    const firstKey = activeUserCache.keys().next().value;
+    activeUserCache.delete(firstKey);
   }
 
-  const insertRes = await pool.query(
-    `INSERT INTO users (telegram_id, first_name, last_name, username, photo_url, referred_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [telegram_id, first_name, last_name, username, photo_url, validReferrer]
-  );
-
-  if (validReferrer) {
-    try {
-      await pool.query(
-        `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username, has_started_mining)
-         VALUES ($1, $2, $3, $4, FALSE)
-         ON CONFLICT (referred_id) DO UPDATE SET referrer_id = EXCLUDED.referrer_id`,
-        [validReferrer, telegram_id, `${first_name} ${last_name}`.trim(), username]
-      );
-    } catch (e) {
-      console.error('Error recording referral:', e.message);
-    }
+  // Record referral asynchronously in background if newly referred
+  if (validReferrer && user.referred_by === validReferrer) {
+    pool.query(
+      `INSERT INTO referrals (referrer_id, referred_id, referred_name, referred_username, has_started_mining)
+       VALUES ($1, $2, $3, $4, FALSE)
+       ON CONFLICT (referred_id) DO NOTHING`,
+      [validReferrer, telegram_id, `${first_name} ${last_name}`.trim(), username]
+    ).catch(e => console.warn('Background referral link notice:', e.message));
   }
 
-  return insertRes.rows[0];
+  return user;
 }
 
 // Helper: Get full user details with history & referrals
@@ -292,122 +279,167 @@ async function addTransaction({ telegramId, type, amount, network = 'BEP20', txH
   return res.rows[0];
 }
 
-// Helper: Credit Deposit & Handle 10% Referral Commission
+// Helper: Credit Deposit & Handle 10% Referral Commission (Atomic Transaction)
 async function recordVerifiedDeposit({ telegramId, amount, txHash, network = 'BEP20' }) {
   const tid = telegramId.toString();
   const numAmount = Number(amount);
 
-  // Check if txHash already used
-  if (txHash) {
-    const existTx = await pool.query('SELECT id FROM transactions WHERE tx_hash = $1', [txHash]);
-    if (existTx.rows.length > 0) {
-      throw new Error('এই Transaction Hash ইতিমধ্যে ব্যবহার করা হয়েছে!');
+  if (isNaN(numAmount) || numAmount <= 0) {
+    throw new Error('Invalid deposit amount');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Strict case-insensitive duplicate check inside transaction
+    if (txHash) {
+      const existTx = await client.query(
+        'SELECT id FROM transactions WHERE LOWER(tx_hash) = LOWER($1)',
+        [txHash]
+      );
+      if (existTx.rows.length > 0) {
+        throw new Error('এই Transaction Hash ইতিমধ্যে ব্যবহার করা হয়েছে! (Transaction hash already claimed)');
+      }
     }
-  }
 
-  // Update user deposit balance & total deposit
-  const updateRes = await pool.query(
-    `UPDATE users 
-     SET deposit_balance = deposit_balance + $1,
-         total_deposit = total_deposit + $1,
-         updated_at = NOW()
-     WHERE telegram_id = $2
-     RETURNING *`,
-    [numAmount, tid]
-  );
-
-  const updatedUser = updateRes.rows[0];
-
-  // Record Deposit Transaction
-  await addTransaction({
-    telegramId: tid,
-    type: 'deposit',
-    amount: numAmount,
-    network,
-    txHash,
-    status: 'Completed',
-    note: `USDT Deposit verified via ${network}`
-  });
-
-  // When a referred user deposits, give flat $0.10 commission to referrer's WITHDRAWABLE balance
-  if (updatedUser && updatedUser.referred_by) {
-    const commission = 0.10; // Fixed $0.10 reward to referrer on deposit, no matter the deposit amount
-    const referrerId = updatedUser.referred_by;
-    await pool.query(
-      `UPDATE users
-       SET wallet_balance = wallet_balance + $1,
-           total_referral_bonus = total_referral_bonus + $1,
+    // 2. Update user deposit balance & total deposit
+    const updateRes = await client.query(
+      `UPDATE users 
+       SET deposit_balance = deposit_balance + $1,
+           total_deposit = total_deposit + $1,
            updated_at = NOW()
-       WHERE telegram_id = $2`,
-      [commission, referrerId]
+       WHERE telegram_id = $2
+       RETURNING *`,
+      [numAmount, tid]
     );
 
-    await pool.query(
-      `UPDATE referrals 
-       SET deposit_amount = deposit_amount + $1,
-           commission_earned = commission_earned + $2
-       WHERE referrer_id = $3 AND referred_id = $4`,
-      [numAmount, commission, referrerId, tid]
+    const updatedUser = updateRes.rows[0];
+
+    // 3. Record Deposit Transaction
+    await client.query(
+      `INSERT INTO transactions (telegram_id, type, amount, network, tx_hash, status, note)
+       VALUES ($1, 'deposit', $2, $3, $4, 'Completed', $5)`,
+      [tid, numAmount, network, txHash, `USDT Deposit verified via ${network}`]
     );
 
-    await addTransaction({
-      telegramId: referrerId,
-      type: 'referral_bonus',
-      amount: commission,
-      network: 'BEP20',
-      status: 'Completed',
-      note: `Referral commission ($0.10) from deposit by user ${tid}`
-    });
+    // 4. Referral commission ($0.10 flat to referrer's withdrawable balance)
+    if (updatedUser && updatedUser.referred_by) {
+      const commission = 0.10;
+      const referrerId = updatedUser.referred_by;
+
+      await client.query(
+        `UPDATE users
+         SET wallet_balance = wallet_balance + $1,
+             total_referral_bonus = total_referral_bonus + $1,
+             updated_at = NOW()
+         WHERE telegram_id = $2`,
+        [commission, referrerId]
+      );
+
+      await client.query(
+        `UPDATE referrals 
+         SET deposit_amount = deposit_amount + $1,
+             commission_earned = commission_earned + $2
+         WHERE referrer_id = $3 AND referred_id = $4`,
+        [numAmount, commission, referrerId, tid]
+      );
+
+      await client.query(
+        `INSERT INTO transactions (telegram_id, type, amount, network, status, note)
+         VALUES ($1, 'referral_bonus', $2, 'BEP20', 'Completed', $3)`,
+        [referrerId, commission, `Referral commission ($0.10) from deposit by user ${tid}`]
+      );
+    }
+
+    await client.query('COMMIT');
+    return updatedUser;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-
-  return updatedUser;
 }
 
-// Helper: Record Withdrawal (Pending)
+// Helper: Record Withdrawal (Pending) with SQL Transaction & Row-level Locking (Blocks Inspect Element & Double-Spending)
 async function recordWithdrawalRequest({ telegramId, amount, address, network = 'BEP20' }) {
   const tid = telegramId.toString();
   const numAmount = Number(amount);
 
-  // Check balance and ban status
-  const userRes = await pool.query('SELECT wallet_balance, withdraw_address, is_address_locked, is_banned FROM users WHERE telegram_id = $1', [tid]);
-  if (userRes.rows.length === 0) {
-    throw new Error('User not found');
+  if (isNaN(numAmount) || numAmount < 0.1) {
+    throw new Error('সর্বনিম্ন উইথড্র ০.১০ USDT! (Minimum withdrawal is 0.10 USDT)');
   }
 
-  const user = userRes.rows[0];
-  if (user.is_banned) {
-    throw new Error('আপনার অ্যাকাউন্টটি ব্যান করা হয়েছে! সাপোর্টে যোগাযোগ করুন।');
+  const cleanAddress = (address || '').trim();
+  if (!cleanAddress.startsWith('0x') || cleanAddress.length < 38) {
+    throw new Error('দয়া করে সঠিক BEP20 ওয়ালেট অ্যাড্রেস দিন!');
   }
 
-  if (Number(user.wallet_balance) < numAmount) {
-    throw new Error('অপর্যাপ্ত ব্যালেন্স! (Insufficient withdrawable balance)');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Lock user row exclusively to prevent race conditions & double withdrawals
+    const userRes = await client.query(
+      'SELECT wallet_balance, withdraw_address, is_address_locked, is_banned FROM users WHERE telegram_id = $1 FOR UPDATE',
+      [tid]
+    );
+    if (userRes.rows.length === 0) {
+      throw new Error('User not found');
+    }
+
+    const user = userRes.rows[0];
+    if (user.is_banned) {
+      throw new Error('আপনার অ্যাকাউন্টটি ব্যান করা হয়েছে! সাপোর্টে যোগাযোগ করুন।');
+    }
+
+    // 2. Strict Server-Side Balance Check (Blocks Inspect Element manipulations 100%)
+    const currentBalance = Number(user.wallet_balance || 0);
+    if (currentBalance < numAmount) {
+      throw new Error(`অপর্যাপ্ত ব্যালেন্স! আপনার ব্যালেন্স $${currentBalance.toFixed(4)} USDT, কিন্তু উইথড্র চেয়েছেন $${numAmount.toFixed(4)} USDT`);
+    }
+
+    // 3. Address Lock Check: If account has a locked address, it CANNOT be changed
+    if (user.is_address_locked && user.withdraw_address) {
+      if (user.withdraw_address.trim().toLowerCase() !== cleanAddress.toLowerCase()) {
+        throw new Error(`আপনার অ্যাকাউন্টটি এই অ্যাড্রেসে লক করা: ${user.withdraw_address}। আপনি অন্য কোনো অ্যাড্রেসে উইথড্র করতে পারবেন না। অ্যাডমিনকে রিসেট করতে বলুন।`);
+      }
+    }
+
+    // 4. Atomic Balance Deduction (wallet_balance >= numAmount enforced at DB level)
+    const updateRes = await client.query(
+      `UPDATE users 
+       SET wallet_balance = wallet_balance - $1,
+           total_withdraw = total_withdraw + $1,
+           withdraw_address = COALESCE(withdraw_address, $2),
+           is_address_locked = TRUE,
+           updated_at = NOW()
+       WHERE telegram_id = $3 AND wallet_balance >= $1
+       RETURNING *`,
+      [numAmount, cleanAddress, tid]
+    );
+
+    if (updateRes.rows.length === 0) {
+      throw new Error('ব্যালেন্স অপর্যাপ্ত বা ইতিমধ্যে উইথড্র করা হয়েছে।');
+    }
+
+    // 5. Insert Pending Withdrawal Transaction
+    const txRes = await client.query(
+      `INSERT INTO transactions (telegram_id, type, amount, network, wallet_address, status, note)
+       VALUES ($1, 'withdraw', $2, $3, $4, 'Pending', 'Withdrawal submitted (BEP20)')
+       RETURNING *`,
+      [tid, numAmount, network, cleanAddress]
+    );
+
+    await client.query('COMMIT');
+    return { user: updateRes.rows[0], transaction: txRes.rows[0] };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-
-  // Deduct from wallet balance and increase total_withdraw
-  const updateRes = await pool.query(
-    `UPDATE users 
-     SET wallet_balance = wallet_balance - $1,
-         total_withdraw = total_withdraw + $1,
-         withdraw_address = COALESCE(withdraw_address, $2),
-         is_address_locked = TRUE,
-         updated_at = NOW()
-     WHERE telegram_id = $3
-     RETURNING *`,
-    [numAmount, address.trim(), tid]
-  );
-
-  // Add transaction with status 'Pending'
-  const tx = await addTransaction({
-    telegramId: tid,
-    type: 'withdraw',
-    amount: numAmount,
-    network,
-    walletAddress: address.trim(),
-    status: 'Pending',
-    note: `Withdrawal submitted (BEP20)`
-  });
-
-  return { user: updateRes.rows[0], transaction: tx };
 }
 
 // Helper: Buy Power Plan using Deposit Balance
@@ -530,83 +562,116 @@ async function startUserMining(telegramId) {
   };
 }
 
-// Helper: Claim Mined Balance and optionally restart 24h mining
+// Helper: Claim Mined Balance and optionally restart 24h mining (Protected against inspect element and fake claims)
 async function claimMinedReward(telegramId, amount, restart = false) {
   const tid = telegramId.toString();
   const amt = Number(amount);
-  if (amt <= 0) throw new Error('Invalid claim amount');
 
-  // Fetch current user state
-  const uRes = await pool.query(
-    'SELECT telegram_id, is_mining_active, mining_started_at, mined_unclaimed, claimed_in_session, daily_mining_rate FROM users WHERE telegram_id = $1',
-    [tid]
-  );
-  if (uRes.rows.length === 0) throw new Error('User not found');
-  const user = uRes.rows[0];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  const now = Date.now();
-  const SESSION_MS = 24 * 60 * 60 * 1000;
-  const startTime = user.mining_started_at ? new Date(user.mining_started_at).getTime() : null;
-  const elapsed = startTime ? (now - startTime) : SESSION_MS + 1;
-  const isStillInSession = user.is_mining_active && startTime && (elapsed < SESSION_MS);
+    // Fetch and lock current user state to prevent concurrent double-claims
+    const uRes = await client.query(
+      'SELECT telegram_id, is_mining_active, mining_started_at, mined_unclaimed, claimed_in_session, daily_mining_rate, wallet_balance, is_banned FROM users WHERE telegram_id = $1 FOR UPDATE',
+      [tid]
+    );
+    if (uRes.rows.length === 0) throw new Error('User not found');
+    const user = uRes.rows[0];
 
-  let query = '';
-  let params = [];
+    if (user.is_banned) {
+      throw new Error('আপনার অ্যাকাউন্টটি ব্যান করা হয়েছে! সাপোর্টে যোগাযোগ করুন।');
+    }
 
-  if (restart) {
-    // Claim and restart fresh 24h mining cycle
-    query = `
-      UPDATE users 
-      SET wallet_balance = wallet_balance + $1,
-          mined_unclaimed = 0,
-          claimed_in_session = 0,
-          is_mining_active = TRUE,
-          mining_started_at = NOW(),
-          has_notified_claim_001 = FALSE,
-          has_notified_24h_stopped = FALSE,
-          updated_at = NOW()
-      WHERE telegram_id = $2
-      RETURNING *`;
-    params = [amt, tid];
-  } else if (isStillInSession) {
-    // Intermediate claim during active 24h mining: KEEP MINING RUNNING!
-    query = `
-      UPDATE users 
-      SET wallet_balance = wallet_balance + $1,
-          mined_unclaimed = GREATEST(0, mined_unclaimed - $1),
-          claimed_in_session = claimed_in_session + $1,
-          has_notified_claim_001 = FALSE,
-          updated_at = NOW()
-      WHERE telegram_id = $2
-      RETURNING *`;
-    params = [amt, tid];
-  } else {
-    // 24h session ended: claim reward and wait for user to start new cycle
-    query = `
-      UPDATE users 
-      SET wallet_balance = wallet_balance + $1,
-          mined_unclaimed = 0,
-          claimed_in_session = 0,
-          is_mining_active = FALSE,
-          mining_started_at = NULL,
-          updated_at = NOW()
-      WHERE telegram_id = $2
-      RETURNING *`;
-    params = [amt, tid];
+    // SERVER-SIDE STRICT REWARD ACCRUAL CALCULATION:
+    // Protects against client-side Inspect Element & fake POST payloads
+    const now = Date.now();
+    const SESSION_MS = 24 * 60 * 60 * 1000;
+    const startTime = user.mining_started_at ? new Date(user.mining_started_at).getTime() : null;
+    const elapsed = startTime ? Math.max(0, now - startTime) : 0;
+    const dailyRate = Number(user.daily_mining_rate || 0.05);
+    const claimedSoFar = Number(user.claimed_in_session || 0);
+
+    let accruedInSession = 0;
+    if (user.is_mining_active && startTime) {
+      const progress = Math.min(1, elapsed / SESSION_MS);
+      accruedInSession = Math.max(0, (dailyRate * progress) - claimedSoFar);
+    }
+
+    const priorUnclaimed = Number(user.mined_unclaimed || 0);
+    const totalClaimable = Number((accruedInSession + priorUnclaimed).toFixed(6));
+
+    if (totalClaimable < 0.0001) {
+      throw new Error('দাবি করার মতো পর্যাপ্ত মাইনিং ব্যালেন্স নেই! (Minimum claim threshold is 0.0001 USDT)');
+    }
+
+    // STRICT CLAMPING: Client CANNOT claim more than mathematically accrued on the server!
+    const verifiedAmount = (amt > 0 && amt <= totalClaimable) ? amt : totalClaimable;
+
+    let updateQuery = '';
+    let params = [];
+
+    const isStillInSession = user.is_mining_active && startTime && (elapsed < SESSION_MS);
+
+    if (restart) {
+      // Claim verified amount and restart fresh 24h cycle
+      updateQuery = `
+        UPDATE users 
+        SET wallet_balance = wallet_balance + $1,
+            mined_unclaimed = 0,
+            claimed_in_session = 0,
+            is_mining_active = TRUE,
+            mining_started_at = NOW(),
+            has_notified_claim_001 = FALSE,
+            has_notified_24h_stopped = FALSE,
+            updated_at = NOW()
+        WHERE telegram_id = $2
+        RETURNING *`;
+      params = [verifiedAmount, tid];
+    } else if (isStillInSession) {
+      // Intermediate claim during active session: keep mining running!
+      updateQuery = `
+        UPDATE users 
+        SET wallet_balance = wallet_balance + $1,
+            mined_unclaimed = GREATEST(0, mined_unclaimed - $1),
+            claimed_in_session = claimed_in_session + $1,
+            has_notified_claim_001 = FALSE,
+            updated_at = NOW()
+        WHERE telegram_id = $2
+        RETURNING *`;
+      params = [verifiedAmount, tid];
+    } else {
+      // 24h cycle finished: claim and stop mining until user starts new cycle
+      updateQuery = `
+        UPDATE users 
+        SET wallet_balance = wallet_balance + $1,
+            mined_unclaimed = 0,
+            claimed_in_session = 0,
+            is_mining_active = FALSE,
+            mining_started_at = NULL,
+            updated_at = NOW()
+        WHERE telegram_id = $2
+        RETURNING *`;
+      params = [verifiedAmount, tid];
+    }
+
+    const res = await client.query(updateQuery, params);
+
+    // Record Transaction
+    await client.query(
+      `INSERT INTO transactions (telegram_id, type, amount, network, status, note)
+       VALUES ($1, 'claim', $2, 'Internal', 'Completed', 'Mining reward claimed to main wallet')`,
+      [tid, verifiedAmount]
+    );
+
+    await client.query('COMMIT');
+    return res.rows[0];
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-
-  const res = await pool.query(query, params);
-
-  await addTransaction({
-    telegramId: tid,
-    type: 'claim',
-    amount: amt,
-    network: 'Internal',
-    status: 'Completed',
-    note: 'Mining reward claimed to main wallet'
-  });
-
-  return res.rows[0];
 }
 
 // Helper: Backwards-compatible recordMiningClaim

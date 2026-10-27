@@ -190,6 +190,13 @@ function initAdminBot() {
     adminBotInstance = bot;
     console.log('🛡️  Admin Bot is running in polling mode...');
 
+    bot.on('polling_error', (error) => {
+      if (error.code === 'ETELEGRAM' && String(error.message).includes('409')) {
+        return;
+      }
+      console.warn(`[AdminBot Polling] ${error.message || error}`);
+    });
+
     bot.getMe().then(me => {
       console.log(`🤖 Admin Bot @${me.username} connected. Authorized Admins: ${getAuthorizedAdmins().join(', ')}`);
       // Warm up admin chat IDs from DB & ENV immediately

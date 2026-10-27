@@ -495,6 +495,8 @@ async function checkMiningNotifications() {
       SELECT telegram_id, mining_started_at, is_mining_active, daily_mining_rate, has_notified_claim_001, has_notified_24h_stopped, claimed_in_session, mined_unclaimed
       FROM users
       WHERE is_mining_active = TRUE AND mining_started_at IS NOT NULL
+      ORDER BY last_active_at DESC
+      LIMIT 150
     `);
 
     const now = Date.now();
