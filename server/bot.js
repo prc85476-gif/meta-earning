@@ -595,7 +595,7 @@ function initTelegramBot(webappUrl) {
         if (isMining) {
           const remMs = SESSION_MS - (now - startTime);
           const remHours = Math.floor(remMs / (3600 * 1000));
-          const remMins = Math.floor(((remMs % (3600 * 1000)) / (60 * 1000));
+          const remMins = Math.floor(((remMs % (3600 * 1000)) / (60 * 1000)));
           const unclaimed = Number(user.live_mined_unclaimed || user.mined_unclaimed || 0).toFixed(6);
 
           const text =
