@@ -901,9 +901,13 @@ async function getAllUserTelegramIds() {
 
 // Admin Helper: Reset user locked BEP20 address
 async function resetUserWithdrawAddress(telegramId) {
+  const cleanId = (telegramId || '').toString().trim().replace(/^@/, '');
   const res = await pool.query(
-    `UPDATE users SET withdraw_address = NULL, updated_at = NOW() WHERE telegram_id = $1 RETURNING *`,
-    [telegramId.toString()]
+    `UPDATE users 
+     SET withdraw_address = NULL, is_address_locked = FALSE, updated_at = NOW() 
+     WHERE telegram_id = $1 OR LOWER(username) = LOWER($1) 
+     RETURNING *`,
+    [cleanId]
   );
   return res.rows[0];
 }
