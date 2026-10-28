@@ -121,7 +121,7 @@ async function verifyBscDeposit({ txHash, userId }) {
     return {
       success: false,
       code: 'INVALID_HASH_FORMAT',
-      message: 'Transaction ID format is invalid. (সঠিক Transaction ID দিন)'
+      message: 'Transaction ID format is invalid.'
     };
   }
 
@@ -140,7 +140,7 @@ async function verifyBscDeposit({ txHash, userId }) {
     return {
       success: false,
       code: 'INVALID_HASH_SYNTAX',
-      message: 'Invalid Transaction ID length or character format. (দয়া করে সঠিক ৬৪-ডিজিটের TxID দিন)'
+      message: 'Invalid Transaction ID length or character format. Please provide a valid 64-character TxID.'
     };
   }
 
@@ -151,7 +151,7 @@ async function verifyBscDeposit({ txHash, userId }) {
     return {
       success: false,
       code: 'ALREADY_USED',
-      message: 'This Transaction ID has already been claimed and credited! (এক ট্রানজেকশন আইডি ২ বার ব্যবহার করা যাবে না)'
+      message: 'This Transaction ID has already been claimed and credited!'
     };
   }
 
@@ -168,7 +168,7 @@ async function verifyBscDeposit({ txHash, userId }) {
         return {
           success: false,
           code: 'ALREADY_USED',
-          message: 'This Transaction ID has already been claimed and credited! (এক ট্রানজেকশন আইডি ২ বার ব্যবহার করা যাবে না)'
+          message: 'This Transaction ID has already been claimed and credited!'
         };
       }
     }
@@ -196,7 +196,7 @@ async function verifyBscDeposit({ txHash, userId }) {
     return {
       success: false,
       code: 'NOT_FOUND',
-      message: 'Transaction not found on BSC blockchain yet. Please confirm your transfer is complete and try again. (ব্লকচেইনে ট্রানজেকশন পাওয়া যায়নি, দয়া করে আবার চেক করুন)'
+      message: 'Transaction not found on BSC blockchain yet. Please confirm your transfer is complete and try again.'
     };
   }
 
@@ -205,7 +205,7 @@ async function verifyBscDeposit({ txHash, userId }) {
     return {
       success: false,
       code: 'TX_FAILED',
-      message: 'Transaction was reverted or failed on the BSC blockchain. (ট্রানজেকশনটি ব্লকচেইনে ফেইল্ড হয়েছে, দয়া করে আবার ডিপোজিট করুন)'
+      message: 'Transaction was reverted or failed on the BSC blockchain. Please try depositing again.'
     };
   }
 
@@ -243,7 +243,7 @@ async function verifyBscDeposit({ txHash, userId }) {
       return {
         success: false,
         code: 'FAKE_OR_WRONG_TOKEN',
-        message: 'Fake or unsupported token detected! You must pay with official USDT (BEP20). (ভুয়া বা অন্য টোকেন গ্রহণযোগ্য নয়, শুধুমাত্র আসল USDT BEP20 গ্রহণযোগ্য)'
+        message: 'Fake or unsupported token detected! You must pay with official USDT (BEP20).'
       };
     }
 
@@ -251,14 +251,14 @@ async function verifyBscDeposit({ txHash, userId }) {
       return {
         success: false,
         code: 'WRONG_RECIPIENT',
-        message: 'Transaction recipient mismatch! Funds were not sent to our official deposit address (0xf8e3...FA81). (আমাদের ডিপোজিট এড্রেসে পেমেন্ট পাঠানো হয়নি)'
+        message: 'Transaction recipient mismatch! Funds were not sent to our official deposit address.'
       };
     }
 
     return {
       success: false,
       code: 'NO_USDT_TRANSFER',
-      message: 'No valid USDT (BEP20) transfer found in this transaction. (কোনো বৈধ USDT BEP20 ট্রান্সফার পাওয়া যায়নি, দয়া করে আবার চেষ্টা করুন)'
+      message: 'No valid USDT (BEP20) transfer found in this transaction. Please try again.'
     };
   }
 
@@ -277,7 +277,7 @@ async function verifyBscDeposit({ txHash, userId }) {
     return {
       success: false,
       code: 'BELOW_MINIMUM',
-      message: `Deposit amount (${creditedAmount.toFixed(4)} USDT) is below the minimum required 3.00 USDT threshold! (নূন্যতম ডিপোজিট ৩.০০ USDT হতে হবে)`
+      message: `Deposit amount (${creditedAmount.toFixed(4)} USDT) is below the minimum required 3.00 USDT threshold!`
     };
   }
 

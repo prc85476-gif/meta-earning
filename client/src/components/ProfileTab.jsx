@@ -90,7 +90,7 @@ export const ProfileTab = ({
             <div 
               className="profile-uid-pill" 
               onClick={handleCopyUid} 
-              title={lang === 'bn' ? 'ইউজার আইডি কপি করুন' : 'Click to copy UID'}
+              title="Click to copy UID"
             >
               <span className="uid-lbl">UID:</span>
               <span className="uid-val">{user?.id || '987654321'}</span>
@@ -119,8 +119,8 @@ export const ProfileTab = ({
             <Send size={16} strokeWidth={2.4} />
           </div>
           <div className="action-text-group">
-            <span className="action-sub-text">{lang === 'bn' ? 'অফিসিয়াল নিউজ' : 'Latest News'}</span>
-            <span className="action-main-title">{lang === 'bn' ? 'অফিসিয়াল চ্যানেল' : 'Official Channel'}</span>
+            <span className="action-sub-text">Latest News</span>
+            <span className="action-main-title">Official Channel</span>
           </div>
         </button>
 
@@ -134,8 +134,8 @@ export const ProfileTab = ({
             <ShieldCheck size={16} strokeWidth={2.4} />
           </div>
           <div className="action-text-group">
-            <span className="action-sub-text">{lang === 'bn' ? 'পেমেন্ট প্রুফ' : 'Payment Proof'}</span>
-            <span className="action-main-title">{lang === 'bn' ? 'পেমেন্ট রিভিউ চ্যানেল' : 'Payout Review Channel'}</span>
+            <span className="action-sub-text">Payment Proof</span>
+            <span className="action-main-title">Payout Review Channel</span>
           </div>
         </button>
       </section>
@@ -149,19 +149,19 @@ export const ProfileTab = ({
             triggerHaptic('light');
             if (onOpenDeposit) onOpenDeposit();
           }}
-          title={lang === 'bn' ? 'ডিপোজিট করতে ক্লিক করুন' : 'Click to Deposit'}
+          title="Click to Deposit"
         >
           <div className="profile-stat-header">
             <div className="profile-stat-icon-wrap invest">
               <Coins size={16} strokeWidth={2.4} />
             </div>
             <span className="profile-stat-tag invest">
-              {lang === 'bn' ? 'ডিপোজিট' : 'Deposit'}
+              Deposit
             </span>
           </div>
           <div className="profile-stat-info">
             <span className="profile-stat-lbl">
-              {lang === 'bn' ? 'টোটাল ইনভেস্ট' : 'Total Invest'}
+              Total Invest
             </span>
             <span className="profile-stat-val invest">
               ${formatUSDT(effectiveInvested)} USDT
@@ -176,19 +176,19 @@ export const ProfileTab = ({
             triggerHaptic('light');
             if (onOpenWithdraw) onOpenWithdraw();
           }}
-          title={lang === 'bn' ? 'উইথড্র করতে ক্লিক করুন' : 'Click to Withdraw'}
+          title="Click to Withdraw"
         >
           <div className="profile-stat-header">
             <div className="profile-stat-icon-wrap withdraw">
               <ArrowUpFromLine size={16} strokeWidth={2.4} />
             </div>
             <span className="profile-stat-tag withdraw">
-              {lang === 'bn' ? 'উত্তোলন' : 'Withdrawal'}
+              Withdrawal
             </span>
           </div>
           <div className="profile-stat-info">
             <span className="profile-stat-lbl">
-              {lang === 'bn' ? 'টোটাল উইথড্র' : 'Total Withdraw'}
+              Total Withdraw
             </span>
             <span className="profile-stat-val withdraw">
               ${formatUSDT(totalWithdraw || 0)} USDT
@@ -201,7 +201,7 @@ export const ProfileTab = ({
       <RecentActivity
         activities={activities}
         lang={lang}
-        title={lang === 'bn' ? 'সাম্প্রতিক হিস্টোরি' : 'Recent Account History'}
+        title="Recent Account History"
       />
 
       {/* 5. SETTINGS: LANGUAGE & SUPPORT */}
@@ -215,7 +215,7 @@ export const ProfileTab = ({
         >
           <div className="setting-left">
             <Globe size={18} color="#0284c7" />
-            <span>{lang === 'bn' ? 'ভাষা / Language' : 'Language'}</span>
+            <span>Language</span>
           </div>
           <div className="setting-right-btn">
             <span>{SUPPORTED_LANGUAGES.find(l => l.code === lang)?.native || 'English'}</span>

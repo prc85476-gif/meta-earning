@@ -29,7 +29,7 @@ export const LanguageModal = ({ isOpen, onClose, currentLang, onSelectLang }) =>
                 Select Language
               </h3>
               <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                Choose language / ভাষা নির্বাচন করুন
+                Choose language
               </p>
             </div>
           </div>

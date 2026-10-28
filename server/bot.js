@@ -119,7 +119,7 @@ function notifyUserWithdrawalSubmitted(telegramId, { amount, address, network = 
   const text =
 `✅ *Your Withdraw Success!* ⚡\n\n` +
 `Your withdrawal request has been submitted successfully.\n` +
-`⏳ *Wait 1 theke 2 miniuts* for processing & verification.\n\n` +
+`⏳ *Wait 1 to 2 minutes* for processing & verification.\n\n` +
 `💰 *Amount:* \`$${Number(amount).toFixed(2)} USDT\`\n` +
 `🔒 *Wallet Address:*\n\`${address}\`\n` +
 `🌐 *Network:* ${network} (BNB Smart Chain)\n\n` +
@@ -330,7 +330,7 @@ function initTelegramBot(webappUrl) {
       }
     }).catch(err => console.log('Notice: Could not set default menu button:', err.message));
 
-    // Supported Languages (Excluding Bengali as requested: "bangla bade all sob thakbe flag soho")
+    // Supported Languages (9 global languages excluding Bengali)
     const BOT_LANGUAGES = [
       { code: 'en', label: '🇬🇧 English', name: 'English' },
       { code: 'ru', label: '🇷🇺 Русский', name: 'Russian' },

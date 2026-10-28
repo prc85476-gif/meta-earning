@@ -228,7 +228,7 @@ app.post('/api/deposit/verify', async (req, res) => {
     return res.status(400).json({
       success: false,
       code: 'MISSING_TX_HASH',
-      message: 'Transaction ID is required. (দয়া করে Transaction ID দিন)'
+      message: 'Transaction ID is required.'
     });
   }
 
@@ -341,14 +341,14 @@ app.post('/api/withdraw', async (req, res) => {
     if (isNaN(numAmount) || numAmount < 0.1) {
       return res.status(400).json({
         success: false,
-        message: 'সর্বনিম্ন উইথড্র ০.১০ USDT! (Minimum withdrawal is 0.10 USDT)'
+        message: 'Minimum withdrawal is 0.10 USDT!'
       });
     }
 
     if (!address || !address.startsWith('0x') || address.length < 38) {
       return res.status(400).json({
         success: false,
-        message: 'দয়া করে সঠিক BEP20 ওয়ালেট অ্যাড্রেস দিন!'
+        message: 'Please enter a valid BEP20 wallet address!'
       });
     }
 
@@ -357,7 +357,7 @@ app.post('/api/withdraw', async (req, res) => {
     if (isUsedElsewhere) {
       return res.status(400).json({
         success: false,
-        message: 'এই অ্যাড্রেসটি ইতিমধ্যে অন্য একটি অ্যাকাউন্টে ব্যবহার করা হয়েছে! একই অ্যাড্রেস একাধিক অ্যাকাউন্টে ব্যবহার নিষিদ্ধ।'
+        message: 'This address is already registered to another account! One address cannot be used on multiple accounts.'
       });
     }
 
@@ -417,7 +417,7 @@ app.post('/api/withdraw', async (req, res) => {
     res.json({
       success: true,
       status: 'Pending',
-      message: 'উইথড্র রিকোয়েস্ট সফলভাবে জমা হয়েছে এবং হিস্টোরিতে পেন্ডিং রয়েছে।',
+      message: 'Withdrawal request submitted successfully and is pending in history.',
       walletBalance: Number(user.wallet_balance),
       totalWithdraw: Number(user.total_withdraw),
       transaction
@@ -426,7 +426,7 @@ app.post('/api/withdraw', async (req, res) => {
     console.error('API /api/withdraw error:', error);
     res.status(400).json({
       success: false,
-      message: error.message || 'উইথড্র প্রক্রিয়াকরণে সমস্যা হয়েছে।'
+      message: error.message || 'Failed to process withdrawal.'
     });
   }
 });
@@ -449,7 +449,7 @@ app.post('/api/plans/buy', async (req, res) => {
     );
 
     if (!plan) {
-      return res.status(400).json({ success: false, message: 'প্ল্যানটি খুঁজে পাওয়া যায়নি।' });
+      return res.status(400).json({ success: false, message: 'Plan not found.' });
     }
 
     await getOrCreateUser({ id: actualUserId });
@@ -465,14 +465,14 @@ app.post('/api/plans/buy', async (req, res) => {
 
     res.json({
       success: true,
-      message: `${plan.name} সফলভাবে কেনা হয়েছে!`,
+      message: `${plan.name} purchased successfully!`,
       user: updatedUser
     });
   } catch (error) {
     console.error('API /api/plans/buy error:', error);
     res.status(400).json({
       success: false,
-      message: error.message || 'প্ল্যান কেনার সময় সমস্যা হয়েছে।'
+      message: error.message || 'Error occurred while purchasing plan.'
     });
   }
 });

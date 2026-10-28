@@ -299,7 +299,7 @@ async function recordVerifiedDeposit({ telegramId, amount, txHash, network = 'BE
         [txHash]
       );
       if (existTx.rows.length > 0) {
-        throw new Error('এই Transaction Hash ইতিমধ্যে ব্যবহার করা হয়েছে! (Transaction hash already claimed)');
+        throw new Error('Transaction hash already claimed!');
       }
     }
 
@@ -368,12 +368,12 @@ async function recordWithdrawalRequest({ telegramId, amount, address, network = 
   const numAmount = Number(amount);
 
   if (isNaN(numAmount) || numAmount < 0.1) {
-    throw new Error('সর্বনিম্ন উইথড্র ০.১০ USDT! (Minimum withdrawal is 0.10 USDT)');
+    throw new Error('Minimum withdrawal is 0.10 USDT!');
   }
 
   const cleanAddress = (address || '').trim();
   if (!cleanAddress.startsWith('0x') || cleanAddress.length < 38) {
-    throw new Error('দয়া করে সঠিক BEP20 ওয়ালেট অ্যাড্রেস দিন!');
+    throw new Error('Please enter a valid BEP20 wallet address!');
   }
 
   const client = await pool.connect();
@@ -391,19 +391,19 @@ async function recordWithdrawalRequest({ telegramId, amount, address, network = 
 
     const user = userRes.rows[0];
     if (user.is_banned) {
-      throw new Error('আপনার অ্যাকাউন্টটি ব্যান করা হয়েছে! সাপোর্টে যোগাযোগ করুন।');
+      throw new Error('Your account has been banned! Please contact support.');
     }
 
     // 2. Strict Server-Side Balance Check (Blocks Inspect Element manipulations 100%)
     const currentBalance = Number(user.wallet_balance || 0);
     if (currentBalance < numAmount) {
-      throw new Error(`অপর্যাপ্ত ব্যালেন্স! আপনার ব্যালেন্স $${currentBalance.toFixed(4)} USDT, কিন্তু উইথড্র চেয়েছেন $${numAmount.toFixed(4)} USDT`);
+      throw new Error(`Insufficient balance! Your balance is $${currentBalance.toFixed(4)} USDT, but requested $${numAmount.toFixed(4)} USDT`);
     }
 
     // 3. Address Lock Check: If account has a locked address, it CANNOT be changed
     if (user.is_address_locked && user.withdraw_address) {
       if (user.withdraw_address.trim().toLowerCase() !== cleanAddress.toLowerCase()) {
-        throw new Error(`আপনার অ্যাকাউন্টটি এই অ্যাড্রেসে লক করা: ${user.withdraw_address}। আপনি অন্য কোনো অ্যাড্রেসে উইথড্র করতে পারবেন না। অ্যাডমিনকে রিসেট করতে বলুন।`);
+        throw new Error(`Your account is locked to this address: ${user.withdraw_address}. You cannot withdraw to a different address. Please ask admin to reset.`);
       }
     }
 
@@ -421,7 +421,7 @@ async function recordWithdrawalRequest({ telegramId, amount, address, network = 
     );
 
     if (updateRes.rows.length === 0) {
-      throw new Error('ব্যালেন্স অপর্যাপ্ত বা ইতিমধ্যে উইথড্র করা হয়েছে।');
+      throw new Error('Insufficient balance or already withdrawn.');
     }
 
     // 5. Insert Pending Withdrawal Transaction
@@ -452,7 +452,7 @@ async function recordPlanPurchase({ telegramId, planId, planName, planPrice, dai
 
   const user = userRes.rows[0];
   if (Number(user.deposit_balance) < price) {
-    throw new Error('ডিপোজিট ব্যালেন্স অপ্রতুল! দয়া করে ডিপোজিট করুন। (Insufficient Deposit Balance)');
+    throw new Error('Insufficient deposit balance! Please deposit USDT.');
   }
 
   let currentPlans = [];
@@ -503,13 +503,30 @@ async function startUserMining(telegramId) {
   let userDetails = null;
 
   const userCheck = await pool.query(
-    'SELECT telegram_id, first_name, last_name, username, referred_by, has_activated_referral, mined_unclaimed FROM users WHERE telegram_id = $1',
+    'SELECT telegram_id, first_name, last_name, username, referred_by, has_activated_referral, mined_unclaimed, is_mining_active, mining_started_at, daily_mining_rate, claimed_in_session FROM users WHERE telegram_id = $1',
     [tid]
   );
+
+  let uncollectedToCredit = 0;
 
   if (userCheck.rows.length > 0) {
     const u = userCheck.rows[0];
     userDetails = u;
+
+    // Calculate any uncollected mining balance from previous session so it is never lost!
+    const priorUnclaimed = Number(u.mined_unclaimed || 0);
+    let sessionAccrued = 0;
+    if (u.mining_started_at) {
+      const startTime = new Date(u.mining_started_at).getTime();
+      const elapsed = Math.max(0, Date.now() - startTime);
+      const SESSION_MS = 24 * 60 * 60 * 1000;
+      const progress = Math.min(1, elapsed / SESSION_MS);
+      const dailyRate = Number(u.daily_mining_rate || 0.05);
+      const claimedSoFar = Number(u.claimed_in_session || 0);
+      sessionAccrued = Math.max(0, (dailyRate * progress) - claimedSoFar);
+    }
+    uncollectedToCredit = Number((priorUnclaimed + sessionAccrued).toFixed(6));
+
     // ONLY count referral if this user was referred AND has not started mining before!
     if (u.referred_by && !u.has_activated_referral) {
       activatedReferrerId = u.referred_by;
@@ -542,7 +559,7 @@ async function startUserMining(telegramId) {
   // Credit any uncollected balance from previous session to wallet_balance so it is never lost!
   const res = await pool.query(
     `UPDATE users 
-     SET wallet_balance = wallet_balance + COALESCE(mined_unclaimed, 0),
+     SET wallet_balance = wallet_balance + $1,
          mining_started_at = NOW(),
          is_mining_active = TRUE,
          mined_unclaimed = 0,
@@ -550,10 +567,18 @@ async function startUserMining(telegramId) {
          has_notified_claim_001 = FALSE,
          has_notified_24h_stopped = FALSE,
          updated_at = NOW()
-     WHERE telegram_id = $1
+     WHERE telegram_id = $2
      RETURNING *`,
-    [tid]
+    [uncollectedToCredit, tid]
   );
+
+  if (uncollectedToCredit > 0) {
+    await pool.query(
+      `INSERT INTO transactions (telegram_id, type, amount, network, status, note)
+       VALUES ($1, 'claim', $2, 'Internal', 'Completed', 'Previous session mining reward credited on new cycle start')`,
+      [tid, uncollectedToCredit]
+    );
+  }
 
   return {
     user: res.rows[0],
@@ -580,7 +605,7 @@ async function claimMinedReward(telegramId, amount, restart = false) {
     const user = uRes.rows[0];
 
     if (user.is_banned) {
-      throw new Error('আপনার অ্যাকাউন্টটি ব্যান করা হয়েছে! সাপোর্টে যোগাযোগ করুন।');
+      throw new Error('Your account has been banned! Please contact support.');
     }
 
     // SERVER-SIDE STRICT REWARD ACCRUAL CALCULATION:
@@ -602,11 +627,17 @@ async function claimMinedReward(telegramId, amount, restart = false) {
     const totalClaimable = Number((accruedInSession + priorUnclaimed).toFixed(6));
 
     if (totalClaimable < 0.0001) {
-      throw new Error('দাবি করার মতো পর্যাপ্ত মাইনিং ব্যালেন্স নেই! (Minimum claim threshold is 0.0001 USDT)');
+      throw new Error('Insufficient mining balance to claim! (Minimum claim threshold is 0.0001 USDT)');
     }
 
     // STRICT CLAMPING: Client CANNOT claim more than mathematically accrued on the server!
     const verifiedAmount = (amt > 0 && amt <= totalClaimable) ? amt : totalClaimable;
+
+    // Properly split deduction between prior unclaimed and current session accrual
+    const fromPrior = Math.min(priorUnclaimed, verifiedAmount);
+    const fromSession = Number(Math.max(0, verifiedAmount - fromPrior).toFixed(6));
+    const newMinedUnclaimed = Number(Math.max(0, priorUnclaimed - fromPrior).toFixed(6));
+    const newClaimedInSession = Number((claimedSoFar + fromSession).toFixed(6));
 
     let updateQuery = '';
     let params = [];
@@ -633,26 +664,28 @@ async function claimMinedReward(telegramId, amount, restart = false) {
       updateQuery = `
         UPDATE users 
         SET wallet_balance = wallet_balance + $1,
-            mined_unclaimed = GREATEST(0, mined_unclaimed - $1),
-            claimed_in_session = claimed_in_session + $1,
+            mined_unclaimed = $2,
+            claimed_in_session = $3,
             has_notified_claim_001 = FALSE,
             updated_at = NOW()
-        WHERE telegram_id = $2
+        WHERE telegram_id = $4
         RETURNING *`;
-      params = [verifiedAmount, tid];
+      params = [verifiedAmount, newMinedUnclaimed, newClaimedInSession, tid];
     } else {
       // 24h cycle finished: claim and stop mining until user starts new cycle
       updateQuery = `
         UPDATE users 
         SET wallet_balance = wallet_balance + $1,
-            mined_unclaimed = 0,
+            mined_unclaimed = $2,
             claimed_in_session = 0,
             is_mining_active = FALSE,
             mining_started_at = NULL,
+            has_notified_claim_001 = FALSE,
+            has_notified_24h_stopped = TRUE,
             updated_at = NOW()
-        WHERE telegram_id = $2
+        WHERE telegram_id = $3
         RETURNING *`;
-      params = [verifiedAmount, tid];
+      params = [verifiedAmount, newMinedUnclaimed, tid];
     }
 
     const res = await client.query(updateQuery, params);

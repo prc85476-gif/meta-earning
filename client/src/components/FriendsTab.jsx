@@ -41,9 +41,7 @@ export const FriendsTab = ({
   const handleShareTelegram = () => {
     triggerHaptic('medium');
     const shareText = encodeURIComponent(
-      lang === 'bn' 
-        ? `আমি USDT Power Plan-এ জয়েন করে ফ্রি ইউএসডিটি মাইনিং করছি! তুমিও জয়েন করে ডেইলি রিওয়ার্ড আয় করো: ${referralLink}`
-        : `Start free USDT mining on Telegram with USDT Power Plan! Join now: ${referralLink}`
+      `Start free USDT mining on Telegram with USDT Power Plan! Join now: ${referralLink}`
     );
     const tgUrl = `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${shareText}`;
     
@@ -66,15 +64,15 @@ export const FriendsTab = ({
               <Users size={17} strokeWidth={2.4} />
             </div>
             <span className="ref-stat-badge-tag">
-              {lang === 'bn' ? 'সক্রিয় মেম্বার' : 'Active'}
+              Active
             </span>
           </div>
           <div className="ref-stat-info">
             <span className="ref-stat-lbl">
-              {lang === 'bn' ? 'মোট রেফার' : 'Total Refer'}
+              Total Refer
             </span>
             <span className="ref-stat-val">
-              {referralList.length} {lang === 'bn' ? 'জন' : 'Users'}
+              {referralList.length} Users
             </span>
           </div>
         </div>
@@ -86,12 +84,12 @@ export const FriendsTab = ({
               <Coins size={17} strokeWidth={2.4} />
             </div>
             <span className="ref-stat-badge-tag">
-              {lang === 'bn' ? '১০% ক্যাশব্যাক' : '10% Cash'}
+              10% Cash
             </span>
           </div>
           <div className="ref-stat-info">
             <span className="ref-stat-lbl">
-              {lang === 'bn' ? 'মোট কমিশন' : 'Total Commission'}
+              Total Commission
             </span>
             <span className="ref-stat-val">
               +{formatUSDT(totalReferralBonus)} USDT
@@ -105,10 +103,10 @@ export const FriendsTab = ({
         <div className="ref-steps-title-row">
           <span className="ref-steps-heading">
             <Sparkles size={16} color="#f59e0b" />
-            {lang === 'bn' ? 'কিভাবে কাজ করে (৩টি সহজ ধাপ)' : 'How It Works (3 Easy Steps)'}
+            How It Works (3 Easy Steps)
           </span>
           <span className="ref-steps-reward-tag">
-            {lang === 'bn' ? '১০% লাইফটাইম' : '10% Lifetime'}
+            10% Lifetime
           </span>
         </div>
 
@@ -117,12 +115,10 @@ export const FriendsTab = ({
           <div className="ref-step-number-pill">01</div>
           <div className="ref-step-content">
             <div className="ref-step-title">
-              {lang === 'bn' ? '১. ইনভাইট লিংক শেয়ার করুন' : '1. Share Your Invite Link'}
+              1. Share Your Invite Link
             </div>
             <div className="ref-step-desc">
-              {lang === 'bn'
-                ? 'আপনার নিজস্ব ইউনিক রেফার লিংক বন্ধুদের বা টেলিগ্রাম গ্রুপে শেয়ার করুন।'
-                : 'Send your personal referral link to your friends or share in Telegram groups.'}
+              Send your personal referral link to your friends or share in Telegram groups.
             </div>
           </div>
         </div>
@@ -132,12 +128,10 @@ export const FriendsTab = ({
           <div className="ref-step-number-pill">02</div>
           <div className="ref-step-content">
             <div className="ref-step-title">
-              {lang === 'bn' ? '২. বন্ধু জয়েন করে মাইনিং শুরু করবে' : '2. Friend Joins & Starts Mining'}
+              2. Friend Joins & Starts Mining
             </div>
             <div className="ref-step-desc">
-              {lang === 'bn'
-                ? 'আপনার লিংকে বন্ধু অ্যাকাউন্ট খুলে ফ্রি ইউএসডিটি মাইনিং চালু করবে।'
-                : 'Your friend registers via your link and activates free USDT mining instantly.'}
+              Your friend registers via your link and activates free USDT mining instantly.
             </div>
           </div>
         </div>
@@ -147,12 +141,10 @@ export const FriendsTab = ({
           <div className="ref-step-number-pill">03</div>
           <div className="ref-step-content">
             <div className="ref-step-title">
-              {lang === 'bn' ? '৩. ফ্রেন্ড ডিপোজিট করলেই আপনার ১০% রিওয়ার্ড' : '3. Friend Deposits, You Get 10%'}
+              3. Friend Deposits, You Get 10%
             </div>
             <div className="ref-step-desc">
-              {lang === 'bn'
-                ? 'আপনার বন্ধু ডিপোজিট করে যেকোনো প্ল্যান নিলেই ১০% ক্যাশ কমিশন সরাসরি আপনার মেইন ব্যালেন্সে জমা হবে এবং সাথে সাথে উইথড্র করতে পারবেন!'
-                : 'Whenever your friend deposits or upgrades any mining power plan, you instantly receive 10% cash reward directly to your withdrawable balance!'}
+              Whenever your friend deposits or upgrades any mining power plan, you instantly receive 10% cash reward directly to your withdrawable balance!
             </div>
           </div>
         </div>
@@ -162,7 +154,7 @@ export const FriendsTab = ({
       <div className="ref-link-card">
         <div className="ref-link-label-row">
           <span className="ref-link-lbl">
-            {lang === 'bn' ? 'আপনার পার্সোনাল রেফারাল লিংক' : 'Your Personal Referral Link'}
+            Your Personal Referral Link
           </span>
         </div>
 
@@ -176,7 +168,7 @@ export const FriendsTab = ({
             onClick={handleCopyLink}
           >
             {copied ? <Check size={13} /> : <Copy size={13} />}
-            <span>{copied ? (lang === 'bn' ? 'কপি হয়েছে' : 'Copied') : (lang === 'bn' ? 'কপি' : 'Copy')}</span>
+            <span>{copied ? 'Copied' : 'Copy'}</span>
           </button>
         </div>
 
@@ -186,7 +178,7 @@ export const FriendsTab = ({
           onClick={handleShareTelegram}
         >
           <Share2 size={16} />
-          <span>{lang === 'bn' ? 'টেলিগ্রামে বন্ধুদের শেয়ার করুন' : 'Share with Friends on Telegram'}</span>
+          <span>Share with Friends on Telegram</span>
         </button>
       </div>
 
@@ -194,10 +186,10 @@ export const FriendsTab = ({
       <div className="ref-list-section">
         <div className="ref-list-header">
           <span className="ref-list-heading">
-            {lang === 'bn' ? 'আপনার রেফারাল তালিকা' : 'Your Referral List'}
+            Your Referral List
           </span>
           <span className="ref-list-count-badge">
-            {referralList.length} {lang === 'bn' ? 'জন রেফার্ড' : 'Referred'}
+            {referralList.length} Referred
           </span>
         </div>
 
@@ -208,12 +200,10 @@ export const FriendsTab = ({
                 <Users size={28} color="#94a3b8" />
               </div>
               <span className="ref-empty-title">
-                {lang === 'bn' ? 'কোনো রেফারেল পাওয়া যায়নি' : 'No Referrals Yet'}
+                No Referrals Yet
               </span>
               <span className="ref-empty-sub">
-                {lang === 'bn' 
-                  ? 'আপনার রেফারেল লিংক শেয়ার করে বন্ধুদের ইনভাইট করুন।'
-                  : 'Share your personal referral link to invite friends and earn rewards.'}
+                Share your personal referral link to invite friends and earn rewards.
               </span>
             </div>
           ) : (
@@ -240,7 +230,7 @@ export const FriendsTab = ({
                       {friend.time && (
                         <>
                           <span>•</span>
-                          <span>{lang === 'bn' ? (friend.timeBn || friend.time) : friend.time}</span>
+                          <span>{friend.time}</span>
                         </>
                       )}
                     </span>
@@ -253,8 +243,8 @@ export const FriendsTab = ({
                   </span>
                   <span className={`ref-friend-status ${friend.hasDeposited && Number(friend.depositAmount) > 0 ? 'deposited' : 'pending'}`}>
                     {friend.hasDeposited && Number(friend.depositAmount) > 0 
-                      ? (lang === 'bn' ? `ডিপোজিট: $${Number(friend.depositAmount).toFixed(2)}` : `Deposited: $${Number(friend.depositAmount).toFixed(2)}`)
-                      : (lang === 'bn' ? 'ডিপোজিট নেই' : 'No Deposit')}
+                      ? `Deposited: $${Number(friend.depositAmount).toFixed(2)}`
+                      : 'No Deposit'}
                   </span>
                 </div>
               </div>

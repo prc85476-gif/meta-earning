@@ -6,7 +6,7 @@ import { triggerHaptic } from '../utils/telegram';
 export const PLANS_DATA = [
   {
     id: 'starter',
-    name: 'Starter Plan (ফ্রি)',
+    name: 'Starter Plan (Free)',
     price: 0,
     hourlyRate: '0.00122',
     hashrate: '1.22 GH/s',
@@ -95,9 +95,9 @@ export const PlansTab = ({ activePlan, onSelectPlan, walletBalance, lang, onOpen
                 </div>
                 <div className="plan-cost">
                   {plan.price === 0 ? (
-                    <span style={{ color: '#10b981', fontWeight: 700 }}>Free / আজীবন ফ্রি</span>
+                    <span style={{ color: '#10b981', fontWeight: 700 }}>Free / Lifetime Free</span>
                   ) : (
-                    <span>মূল্য: <strong>{formatUSDT(plan.price)} USDT</strong> ({plan.dailyEst}/day)</span>
+                    <span>Price: <strong>{formatUSDT(plan.price)} USDT</strong> ({plan.dailyEst}/day)</span>
                   )}
                 </div>
               </div>
@@ -114,7 +114,7 @@ export const PlansTab = ({ activePlan, onSelectPlan, walletBalance, lang, onOpen
                     className="plan-action-btn buy"
                     onClick={() => handleBuy(plan)}
                   >
-                    {canAfford ? t.upgrade : (lang === 'bn' ? 'ডিপোজিট করুন' : 'Deposit')}
+                    {canAfford ? t.upgrade : (t.deposit || 'Deposit')}
                   </button>
                 )}
               </div>

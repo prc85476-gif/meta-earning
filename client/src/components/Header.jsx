@@ -35,7 +35,7 @@ export const Header = ({ user, activePlan, lang, onOpenLanguage, onRefresh }) =>
         <button 
           className="btn-icon-subtle btn-lang-selector" 
           onClick={handleOpenLang} 
-          title="Select Language / ভাষা নির্বাচন করুন"
+          title="Select Language"
           aria-label="Select Language"
         >
           <Globe size={14} color="#0f172a" />

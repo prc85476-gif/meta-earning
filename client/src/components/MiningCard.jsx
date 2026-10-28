@@ -72,12 +72,10 @@ export const MiningCard = ({
           <div className="session-status-pill status-active">
             <span className="pulse-dot"></span>
             <span className="session-label">
-              {lang === 'bn' 
-                ? `২৪ ঘণ্টা মাইনিং চালু (নূন্যতম ক্লেইম $${minClaimAmount})` 
-                : `24h Mining Active (Min Claim $${minClaimAmount})`}
+              {`24h Mining Active (Min Claim $${minClaimAmount})`}
             </span>
             <span className="session-countdown">
-              ⏳ {formatCountdown(miningTimeLeftMs)} {lang === 'bn' ? 'বাকি' : 'left'}
+              ⏳ {formatCountdown(miningTimeLeftMs)} left
             </span>
           </div>
         )}
@@ -86,7 +84,7 @@ export const MiningCard = ({
           <div className="session-status-pill status-idle">
             <span className="idle-dot"></span>
             <span className="session-label">
-              {lang === 'bn' ? '২৪ ঘণ্টার দৈনিক মাইনিং শুরু করতে Start চাপুন' : '24h Session Inactive • Click Start to Begin'}
+              24h Session Inactive • Click Start to Begin
             </span>
           </div>
         )}
@@ -95,7 +93,7 @@ export const MiningCard = ({
           <div className="session-status-pill status-completed">
             <span className="completed-dot"></span>
             <span className="session-label">
-              {lang === 'bn' ? '২৪ ঘণ্টা শেষ ও মাইনিং বন্ধ! Start চাপলে রিওয়ার্ড যোগ হবে ও আবার শুরু হবে' : '24h Complete & Stopped! Click Start to claim & restart'}
+              24h Complete & Stopped! Click Start to claim & restart
             </span>
           </div>
         )}
@@ -119,12 +117,8 @@ export const MiningCard = ({
             disabled={isClaiming || !isClaimReady}
             title={
               !isClaimReady
-                ? (lang === 'bn'
-                    ? `নূন্যতম ক্লেইম $${minClaimAmount} USDT (বর্তমানে মাইন্ড হয়েছে: $${formatMiningNumber(minedBalance, 4)} USDT)`
-                    : `Minimum claim is $${minClaimAmount} USDT (Currently: $${formatMiningNumber(minedBalance, 4)} USDT)`)
-                : (lang === 'bn'
-                    ? `$${formatMiningNumber(minedBalance, 4)} USDT মেইন ব্যালেন্সে ট্রান্সফার করুন`
-                    : `Claim $${formatMiningNumber(minedBalance, 4)} USDT to Main Wallet`)
+                ? `Minimum claim is $${minClaimAmount} USDT (Currently: $${formatMiningNumber(minedBalance, 4)} USDT)`
+                : `Claim $${formatMiningNumber(minedBalance, 4)} USDT to Main Wallet`
             }
           >
             {isClaiming ? (
@@ -182,7 +176,7 @@ export const MiningCard = ({
             <Coins size={16} color="#00b074" strokeWidth={2.4} />
           </div>
           <span className="stat-label">
-            {lang === 'bn' ? 'ডিপোজিট ব্যালেন্স' : 'Deposit Balance'}
+            Deposit Balance
           </span>
           <span className="stat-value green">
             {Number(depositBalance !== undefined ? depositBalance : totalInvestment || 0).toFixed(2)} USDT

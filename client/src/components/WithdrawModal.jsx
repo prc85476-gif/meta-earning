@@ -97,9 +97,7 @@ export const WithdrawModal = ({
     if (!targetAddress || !targetAddress.startsWith('0x') || targetAddress.length < 38) {
       triggerHaptic('error');
       setErrorMsg(
-        lang === 'bn' 
-          ? 'দয়া করে সঠিক BEP20 ওয়ালেট অ্যাড্রেস দিন! (0x দিয়ে শুরু হতে হবে)' 
-          : 'Please enter a valid BEP20 address! (Must start with 0x)'
+        'Please enter a valid BEP20 address! (Must start with 0x)'
       );
       return;
     }
@@ -114,9 +112,7 @@ export const WithdrawModal = ({
       if (registeredAddrs.includes(lower) && lower !== currentLockedLower && !isAddressLocked) {
         triggerHaptic('error');
         setErrorMsg(
-          lang === 'bn'
-            ? 'এই অ্যাড্রেসটি ইতিমধ্যে অন্য একটি অ্যাকাউন্টে ব্যবহার করা হয়েছে! একই অ্যাড্রেস একাধিক জায়গায় ব্যবহার করা যাবে না।'
-            : 'This address is already registered to another account! One address cannot be used in multiple accounts.'
+          'This address is already registered to another account! One address cannot be used in multiple accounts.'
         );
         return;
       }
@@ -163,11 +159,11 @@ export const WithdrawModal = ({
         setIsPendingSuccess(true);
       } else {
         triggerHaptic('error');
-        setErrorMsg(res?.message || (lang === 'bn' ? 'উইথড্র প্রক্রিয়াকরণে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।' : 'Failed to process withdrawal. Please try again.'));
+        setErrorMsg(res?.message || 'Failed to process withdrawal. Please try again.');
       }
     } catch (err) {
       triggerHaptic('error');
-      setErrorMsg(err.message || (lang === 'bn' ? 'সার্ভারে সংযোগ করতে সমস্যা হয়েছে।' : 'Network error submitting withdrawal.'));
+      setErrorMsg(err.message || 'Network error submitting withdrawal.');
     } finally {
       setIsSubmitting(false);
     }
@@ -209,16 +205,14 @@ export const WithdrawModal = ({
 
             <div className="withdraw-pending-badge">
               <Clock size={12} strokeWidth={2.5} />
-              <span>{lang === 'bn' ? 'স্ট্যাটাস: পেন্ডিং' : 'Status: Pending'}</span>
+              <span>Status: Pending</span>
             </div>
 
             <h4 style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', marginBottom: '6px' }}>
-              {lang === 'bn' ? 'উইথড্র রিকোয়েস্ট সফলভাবে জমা হয়েছে!' : 'Withdrawal Request Submitted!'}
+              Withdrawal Request Submitted!
             </h4>
             <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '16px' }}>
-              {lang === 'bn'
-                ? 'আপনার রিকোয়েস্টটি পেন্ডিং অবস্থায় রয়েছে এবং অ্যাকাউন্ট হিস্টোরিতে যোগ হয়েছে।'
-                : 'Your withdrawal request is now pending and added to your account history.'}
+              Your withdrawal request is now pending and added to your account history.
             </p>
 
             {/* Pending Details Box */}
@@ -235,23 +229,23 @@ export const WithdrawModal = ({
               fontSize: '12.5px'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#64748b' }}>{lang === 'bn' ? 'উইথড্র পরিমাণ' : 'Withdraw Amount'}</span>
+                <span style={{ color: '#64748b' }}>Withdraw Amount</span>
                 <span style={{ fontWeight: 800, color: '#0f172a' }}>{submittedData.amount.toFixed(2)} USDT</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#64748b' }}>{lang === 'bn' ? 'নেটওয়ার্ক ফি' : 'Network Fee'}</span>
+                <span style={{ color: '#64748b' }}>Network Fee</span>
                 <span style={{ fontWeight: 600, color: '#64748b' }}>{submittedData.fee.toFixed(2)} USDT</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e2e8f0', paddingTop: '6px' }}>
-                <span style={{ fontWeight: 700, color: '#0f172a' }}>{lang === 'bn' ? 'আপনি পাবেন' : 'You Will Receive'}</span>
+                <span style={{ fontWeight: 700, color: '#0f172a' }}>You Will Receive</span>
                 <span style={{ fontWeight: 800, color: '#2563eb' }}>{submittedData.netAmount.toFixed(2)} USDT</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#64748b' }}>{lang === 'bn' ? 'নেটওয়ার্ক' : 'Network'}</span>
+                <span style={{ color: '#64748b' }}>Network</span>
                 <span style={{ fontWeight: 700, color: '#16a34a' }}>BEP20 (BNB Smart Chain)</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>{lang === 'bn' ? 'অ্যাড্রেস' : 'Address'}</span>
+                <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>Address</span>
                 <span style={{ fontWeight: 600, fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#334155', wordBreak: 'break-all', textAlign: 'right' }}>
                   {submittedData.address}
                 </span>
@@ -264,7 +258,7 @@ export const WithdrawModal = ({
               onClick={handleClose}
             >
               <Check size={16} strokeWidth={2.4} />
-              {lang === 'bn' ? 'ঠিক আছে (Close)' : 'Done'}
+              Done
             </button>
           </div>
         ) : (
@@ -274,7 +268,7 @@ export const WithdrawModal = ({
               {/* Row 1: Coin Selection */}
               <div className="withdraw-select-row">
                 <span className="withdraw-select-label">
-                  {lang === 'bn' ? 'কয়েন সিলেক্ট' : 'Select Coin'}
+                  Select Coin
                 </span>
                 <div className="withdraw-coin-pill">
                   <img src={usdtLogo} alt="USDT" className="withdraw-coin-icon" />
@@ -288,7 +282,7 @@ export const WithdrawModal = ({
               {/* Row 2: BEP20 Network Selection */}
               <div className="withdraw-select-row">
                 <span className="withdraw-select-label">
-                  {lang === 'bn' ? 'নেটওয়ার্ক সিলেক্ট' : 'Select Network'}
+                  Select Network
                 </span>
                 <div className="withdraw-network-pill">
                   <span className="network-dot" />
@@ -310,7 +304,7 @@ export const WithdrawModal = ({
               marginBottom: '10px'
             }}>
               <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>
-                {lang === 'bn' ? 'উইথড্রযোগ্য ব্যালেন্স (মেইন)' : 'Withdrawable Balance (Main)'}
+                Withdrawable Balance (Main)
               </span>
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
                 {formatUSDT(walletBalance)} USDT
@@ -333,22 +327,20 @@ export const WithdrawModal = ({
             }}>
               <Lightbulb size={14} color="#059669" style={{ flexShrink: 0, marginTop: '2px' }} />
               <span>
-                {lang === 'bn' 
-                  ? 'শুধুমাত্র মাইনিং ডেইলি ক্লেইম ও বোনাস উইথড্র করা যাবে। ডিপোজিট ব্যালেন্স মাইনিং প্ল্যানে লক থাকে।' 
-                  : 'Only daily claimed mining rewards & bonuses can be withdrawn. Deposit balance is locked in mining.'}
+                Only daily claimed mining rewards & bonuses can be withdrawn. Deposit balance is locked in mining.
               </span>
             </div>
 
             {/* Address Field with Permanent Lock and Duplicate Check */}
             <div className="form-group">
               <div className="form-label">
-                <span>{lang === 'bn' ? 'উইথড্র BEP20 অ্যাড্রেস' : 'BEP20 Withdrawal Address'}</span>
+                <span>BEP20 Withdrawal Address</span>
                 {isAddressLocked ? (
                   <span style={{ color: '#d97706', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                    <Lock size={12} /> {lang === 'bn' ? 'লক করা' : 'Locked'}
+                    <Lock size={12} /> Locked
                   </span>
                 ) : (
-                  <span style={{ color: '#64748b' }}>{lang === 'bn' ? 'স্থায়ী অ্যাড্রেস' : 'Permanent'}</span>
+                  <span style={{ color: '#64748b' }}>Permanent</span>
                 )}
               </div>
 
@@ -377,16 +369,12 @@ export const WithdrawModal = ({
                 <div className="address-locked-badge">
                   <ShieldCheck size={13} color="#b45309" />
                   <span>
-                    {lang === 'bn' 
-                      ? 'অ্যাড্রেসটি লক করা আছে। সুরক্ষার জন্য এটি আর পরিবর্তন করা যাবে না।' 
-                      : 'Address permanently locked for security. Cannot be modified.'}
+                    Address permanently locked for security. Cannot be modified.
                   </span>
                 </div>
               ) : (
                 <div className="address-first-notice">
-                  {lang === 'bn'
-                    ? '⚠️ সতর্কতা: একবার অ্যাড্রেস দিলে তা স্থায়ীভাবে লক হয়ে যাবে এবং আর পরিবর্তন করা যাবে না। এক অ্যাড্রেস একাধিক অ্যাকাউন্টে ব্যবহার নিষিদ্ধ।'
-                    : '⚠️ Notice: Once set, this address is permanently locked and cannot be changed. Duplicate addresses across accounts are prohibited.'}
+                  ⚠️ Notice: Once set, this address is permanently locked and cannot be changed. Duplicate addresses across accounts are prohibited.
                 </div>
               )}
 
@@ -396,12 +384,10 @@ export const WithdrawModal = ({
                   <Lock size={15} color="#b45309" style={{ flexShrink: 0, marginTop: '2px' }} />
                   <div>
                     <strong style={{ display: 'block', marginBottom: '2px' }}>
-                      {lang === 'bn' ? 'লক অপশন সক্রিয়!' : 'Address Lock Active!'}
+                      Address Lock Active!
                     </strong>
                     <span>
-                      {lang === 'bn'
-                        ? 'আপনার অ্যাকাউন্ট সুরক্ষার স্বার্থে এই উইথড্র অ্যাড্রেসটি লক করা আছে। এটি পরিবর্তন বা এডিট করা সম্ভব নয়।'
-                        : 'For account security, this withdrawal address is locked. It cannot be edited or changed.'}
+                      For account security, this withdrawal address is locked. It cannot be edited or changed.
                     </span>
                   </div>
                 </div>
@@ -477,8 +463,8 @@ export const WithdrawModal = ({
             <button type="submit" className="btn-submit-action blue" disabled={isSubmitting}>
               <ArrowUpFromLine size={16} />
               {isSubmitting 
-                ? (lang === 'bn' ? 'প্রসেসিং হচ্ছে...' : 'Processing...') 
-                : (lang === 'bn' ? 'উইথড্র কনফার্ম করুন' : t.submitWithdraw)}
+                ? 'Processing...' 
+                : t.submitWithdraw}
             </button>
           </form>
         )}

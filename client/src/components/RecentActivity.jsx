@@ -72,7 +72,7 @@ export const RecentActivity = ({ activities = [], onViewAll, lang, title }) => {
             <Clock size={15} color="#ffffff" strokeWidth={2.4} />
           </div>
           <span className="activity-title">
-            {title || (lang === 'bn' ? 'সাম্প্রতিক অ্যাকাউন্ট হিস্টোরি' : 'Recent Account History')}
+            {title || 'Recent Account History'}
           </span>
         </div>
         <button
@@ -83,7 +83,7 @@ export const RecentActivity = ({ activities = [], onViewAll, lang, title }) => {
             if (onViewAll) onViewAll();
           }}
         >
-          <span>{lang === 'bn' ? 'সব দেখুন' : 'View All'}</span>
+          <span>View All</span>
           <ArrowRight size={13} strokeWidth={2.2} />
         </button>
       </div>
@@ -119,7 +119,7 @@ export const RecentActivity = ({ activities = [], onViewAll, lang, title }) => {
                 </span>
                 {item.status && (
                   <span className={`activity-status-tag ${item.status.toLowerCase()}`}>
-                    {item.status === 'Pending' ? (lang === 'bn' ? 'পেন্ডিং' : 'Pending') : item.status}
+                    {item.status}
                   </span>
                 )}
                 <span className="activity-time">{item.time}</span>

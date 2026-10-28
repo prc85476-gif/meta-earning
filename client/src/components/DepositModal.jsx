@@ -101,9 +101,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
         }
       }
       const promptVal = window.prompt(
-        lang === 'bn' 
-          ? 'এখানে আপনার Transaction ID (TxHash) পেস্ট করুন:' 
-          : 'Paste your Transaction ID (TxHash) here:'
+        'Paste your Transaction ID (TxHash) here:'
       );
       if (promptVal && promptVal.trim()) {
         setTxId(promptVal.trim());
@@ -111,9 +109,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
       }
     } catch (err) {
       const promptVal = window.prompt(
-        lang === 'bn' 
-          ? 'এখানে আপনার Transaction ID (TxHash) পেস্ট করুন:' 
-          : 'Paste your Transaction ID (TxHash) here:'
+        'Paste your Transaction ID (TxHash) here:'
       );
       if (promptVal && promptVal.trim()) {
         setTxId(promptVal.trim());
@@ -134,9 +130,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
     if (!rawTx || rawTx.length < 10) {
       triggerHaptic('warning');
       setTxError(
-        lang === 'bn'
-          ? 'অনুগ্রহ করে সঠিক Transaction ID / Hash দিন।'
-          : 'Please enter a valid Transaction Hash / TxID.'
+        'Please enter a valid Transaction Hash / TxID.'
       );
       return;
     }
@@ -147,9 +141,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
     if (!/^0x[a-fA-F0-9]{64}$/.test(formattedTx)) {
       triggerHaptic('warning');
       setTxError(
-        lang === 'bn'
-          ? 'অবৈধ TxHash ফরম্যাট (অবশ্যই 66 সংখ্যার Hex কোড হতে হবে)।'
-          : 'Invalid TxHash format (must be 66 hex characters starting with 0x).'
+        'Invalid TxHash format (must be 66 hex characters starting with 0x).'
       );
       return;
     }
@@ -210,9 +202,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
       setIsSubmittingTx(false);
       triggerHaptic('warning');
       setTxError(
-        lang === 'bn'
-          ? 'সার্ভার বা নেটওয়ার্ক সংযোগ সমস্যা। অনুগ্রহ করে আবার চেষ্টা করুন।'
-          : 'Network or server connection failed. Please try again.'
+        'Network or server connection failed. Please try again.'
       );
     }
   };
@@ -245,8 +235,8 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
             <QrCode size={20} color="#00b074" />
             <span>
               {step === 'receipt' 
-                ? (lang === 'bn' ? 'ডিপোজিট রিসিপ্ট' : 'Deposit Receipt')
-                : (lang === 'bn' ? 'ইউএসডিটি ডিপোজিট' : 'Deposit USDT')}
+                ? 'Deposit Receipt'
+                : 'Deposit USDT'}
             </span>
             <span className="network-pill-badge">BEP20</span>
           </div>
@@ -287,14 +277,14 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
                 />
               </div>
               <span className="qr-scan-hint">
-                {lang === 'bn' ? 'ক্যামেরা অথবা ওয়ালেট দিয়ে স্ক্যান করুন' : 'Scan QR code with your crypto wallet'}
+                Scan QR code with your crypto wallet
               </span>
             </div>
 
             {/* Address Box */}
             <div className="deposit-address-container">
               <label className="deposit-address-label">
-                {lang === 'bn' ? 'ডিপোজিট এড্রেস (BEP20)' : 'Your USDT BEP20 Deposit Address'}
+                Your USDT BEP20 Deposit Address
               </label>
               <div className="deposit-address-box">
                 <span className="address-text">{BEP20_ADDRESS}</span>
@@ -306,12 +296,12 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
                   {copied ? (
                     <>
                       <Check size={14} color="#00b074" strokeWidth={2.6} />
-                      <span>{lang === 'bn' ? 'কপি হয়েছে' : 'Copied'}</span>
+                      <span>Copied</span>
                     </>
                   ) : (
                     <>
                       <Copy size={14} />
-                      <span>{lang === 'bn' ? 'কপি' : 'Copy'}</span>
+                      <span>Copy</span>
                     </>
                   )}
                 </button>
@@ -325,12 +315,10 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
               </div>
               <div className="alert-text-wrap">
                 <span className="alert-title">
-                  {lang === 'bn' ? 'জরুরি সতর্কতা (Important):' : 'Important Notice:'}
+                  Important Notice:
                 </span>
                 <p className="alert-desc">
-                  {lang === 'bn'
-                    ? 'নূন্যতম ডিপোজিট ৩$ USDT (BEP20)। ৩$ এর কম পাঠালে তা অ্যাকাউন্টে যোগ হবে না।'
-                    : 'Minimum deposit is $3 USDT (BEP20). Deposits below $3 cannot be credited or refunded.'}
+                  Minimum deposit is $3 USDT (BEP20). Deposits below $3 cannot be credited or refunded.
                 </p>
               </div>
             </div>
@@ -345,12 +333,12 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
               {isVerifyingNext ? (
                 <>
                   <Loader2 size={18} className="spin-loader" />
-                  <span>{lang === 'bn' ? 'যাচাই করা হচ্ছে...' : 'Verifying...'}</span>
+                  <span>Verifying...</span>
                 </>
               ) : (
                 <>
                   <ShieldCheck size={18} />
-                  <span>{lang === 'bn' ? 'নেক্সট (ভেরিফাই ডিপোজিট)' : 'Next (Verify Deposit)'}</span>
+                  <span>Next (Verify Deposit)</span>
                 </>
               )}
             </button>
@@ -365,23 +353,21 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
               <div className="receipt-badge-row">
                 <span className="receipt-title-lbl">
                   <Receipt size={14} color="#00b074" />
-                  {lang === 'bn' ? 'পেমেন্ট রিসিপ্ট ভেরিফিকেশন' : 'Payment Receipt Verification'}
+                  Payment Receipt Verification
                 </span>
                 <span className="receipt-status-pill">
-                  {lang === 'bn' ? 'পেন্ডিং ভেরিফিকেশন' : 'Pending Verification'}
+                  Pending Verification
                 </span>
               </div>
               <p className="receipt-helper-text">
-                {lang === 'bn' 
-                  ? 'আপনার বাইন্যান্স বা ট্রাস্ট ওয়ালেট থেকে ট্রান্সফারের Transaction ID (TxHash) নিচে পেস্ট করুন।' 
-                  : 'Paste your Transaction ID (TxHash) from your wallet/exchange to verify and credit your balance.'}
+                Paste your Transaction ID (TxHash) from your wallet/exchange to verify and credit your balance.
               </p>
             </div>
 
             {/* Transaction ID Input Form */}
             <div className="receipt-form-group">
               <label htmlFor="txid-input" className="receipt-input-lbl">
-                {lang === 'bn' ? 'ট্রানজেকশন আইডি (Transaction ID / TxHash) *' : 'Transaction ID / Hash (TxHash) *'}
+                Transaction ID / Hash (TxHash) *
               </label>
               <div className="receipt-input-wrapper">
                 <input
@@ -402,7 +388,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
                   onClick={handlePasteTxId}
                 >
                   <Clipboard size={13} />
-                  <span>{lang === 'bn' ? 'পেস্ট' : 'Paste'}</span>
+                  <span>Paste</span>
                 </button>
               </div>
               {txError && (
@@ -414,10 +400,10 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
             <div className="receipt-form-group">
               <div className="receipt-amt-header">
                 <label htmlFor="tx-amount-input" className="receipt-input-lbl">
-                  {lang === 'bn' ? 'ডিপোজিট পরিমাণ (USDT)' : 'Deposited Amount (USDT)'}
+                  Deposited Amount (USDT)
                 </label>
                 <span className="receipt-min-tag">
-                  {lang === 'bn' ? 'নূন্যতম ৩$ USDT' : 'Min $3.00 USDT'}
+                  Min $3.00 USDT
                 </span>
               </div>
               <div className="receipt-amt-wrapper">
@@ -446,12 +432,12 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
               {isSubmittingTx ? (
                 <>
                   <Loader2 size={18} className="spin-loader" />
-                  <span>{lang === 'bn' ? 'ভেরিফাই ও ক্রেডিট হচ্ছে...' : 'Verifying & Crediting...'}</span>
+                  <span>Verifying & Crediting...</span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 size={18} />
-                  <span>{lang === 'bn' ? 'ডিপোজিট কনফার্ম ও ক্রেডিট করুন' : 'Confirm & Credit Deposit'}</span>
+                  <span>Confirm & Credit Deposit</span>
                 </>
               )}
             </button>
@@ -466,7 +452,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
             </div>
 
             <h3 className="success-headline">
-              {lang === 'bn' ? 'ডিপোজিট সফলভাবে জমা হয়েছে!' : 'Deposit Successfully Credited!'}
+              Deposit Successfully Credited!
             </h3>
             <div className="success-amount-display">
               +{parseFloat(amount || 3).toFixed(2)} USDT
@@ -474,11 +460,11 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
 
             <div className="success-details-card">
               <div className="success-row">
-                <span className="success-lbl">{lang === 'bn' ? 'নেটওয়ার্ক' : 'Network'}</span>
+                <span className="success-lbl">Network</span>
                 <span className="success-val">USDT (BEP20)</span>
               </div>
               <div className="success-row">
-                <span className="success-lbl">{lang === 'bn' ? 'স্ট্যাটাস' : 'Status'}</span>
+                <span className="success-lbl">Status</span>
                 <span className="success-val green" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                   <CheckCircle2 size={13} /> Completed
                 </span>
@@ -497,7 +483,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
               onClick={handleClose}
             >
               <Sparkles size={17} />
-              <span>{lang === 'bn' ? 'ড্যাশবোর্ডে ফিরে যান' : 'Back to Dashboard'}</span>
+              <span>Back to Dashboard</span>
             </button>
           </div>
         )}

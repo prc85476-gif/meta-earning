@@ -16,7 +16,10 @@ import { translations, formatUSDT } from './utils/formatters';
 import { ShieldCheck, Cpu, Gift, CheckCircle2 } from 'lucide-react';
 
 export function App() {
-  const [lang, setLang] = useState(() => localStorage.getItem('usdt_lang') || 'en');
+  const [lang, setLang] = useState(() => {
+    const saved = localStorage.getItem('usdt_lang');
+    return saved === 'bn' ? 'en' : (saved || 'en');
+  });
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [depositPreloadedAmount, setDepositPreloadedAmount] = useState(2);
   const [currentTab, setCurrentTab] = useState('mining');
@@ -51,6 +54,7 @@ export function App() {
   });
 
   const [isClaiming, setIsClaiming] = useState(false);
+  const isClaimingRef = useRef(false);
   const [miningStatus, setMiningStatus] = useState('idle'); // 'idle' | 'mining' | 'completed'
   const [miningTimeLeftMs, setMiningTimeLeftMs] = useState(SESSION_DURATION_MS);
 
@@ -254,16 +258,19 @@ export function App() {
       const data = await res.json();
       if (data && data.success && data.user) {
         const u = data.user;
-        if (u.wallet_balance !== undefined) setWalletBalance(Number(u.wallet_balance));
+        // Guard against race conditions: do not overwrite active claiming session balance
+        if (!isClaimingRef.current) {
+          if (u.wallet_balance !== undefined) setWalletBalance(Number(u.wallet_balance));
+          if (u.claimed_in_session !== undefined) {
+            setClaimedInSession(Number(u.claimed_in_session));
+          }
+        }
         if (u.deposit_balance !== undefined) setDepositBalance(Number(u.deposit_balance));
         if (u.total_deposit !== undefined) setTotalInvestment(Number(u.total_deposit));
         if (u.total_withdraw !== undefined) setTotalWithdraw(Number(u.total_withdraw));
         if (u.total_referral_bonus !== undefined) setTotalReferralBonus(Number(u.total_referral_bonus));
         if (u.withdraw_address) {
           localStorage.setItem('usdt_locked_withdraw_address', u.withdraw_address);
-        }
-        if (u.claimed_in_session !== undefined) {
-          setClaimedInSession(Number(u.claimed_in_session));
         }
 
         if (u.mining_started_at && u.is_mining_active) {
@@ -301,6 +308,9 @@ export function App() {
         if (u.daily_mining_rate !== undefined) {
           setDailyMiningRate(Number(u.daily_mining_rate));
         }
+        if (u.hashrate !== undefined) {
+          setUserHashrate(Number(u.hashrate));
+        }
         if (Array.isArray(u.referrals)) {
           const mapped = u.referrals.map((r) => ({
             id: r.referred_id,
@@ -308,7 +318,6 @@ export function App() {
             username: r.username ? `@${r.username}` : (r.referred_username ? `@${r.referred_username}` : (r.referred_id ? `ID: ${r.referred_id}` : '@user')),
             photo_url: r.photo_url || null,
             time: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Joined via link',
-            timeBn: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'লিংকে জয়েন করেছে',
             depositAmount: Number(r.deposit_amount || 0),
             commission: Number(r.commission_earned || 0),
             hasDeposited: Number(r.deposit_amount || 0) > 0
@@ -325,7 +334,7 @@ export function App() {
         }
 
         if (showToastNotice) {
-          showToast(lang === 'bn' ? 'ডাটা ও হিস্টোরি রিফ্রেশ হয়েছে ✅' : 'History & Balance updated ✅');
+          showToast('History & Balance updated ✅');
         }
       }
     } catch (err) {
@@ -407,29 +416,34 @@ export function App() {
 
   const BASE_DAILY = 0.05;
   const BASE_HASHRATE = 1.22;
-  const [dailyMiningRate, setDailyMiningRate] = useState(0.05);
+  const [dailyMiningRate, setDailyMiningRate] = useState(() => {
+    const saved = localStorage.getItem('usdt_daily_mining_rate');
+    return saved !== null ? parseFloat(saved) : 0.05;
+  });
+  const [userHashrate, setUserHashrate] = useState(() => {
+    const saved = localStorage.getItem('usdt_hashrate');
+    return saved !== null ? parseFloat(saved) : 1.22;
+  });
 
-  // Stacking daily earning: base + every purchased plan's daily profit
+  useEffect(() => {
+    localStorage.setItem('usdt_daily_mining_rate', dailyMiningRate.toString());
+  }, [dailyMiningRate]);
+
+  useEffect(() => {
+    localStorage.setItem('usdt_hashrate', userHashrate.toString());
+  }, [userHashrate]);
+
+  // Synchronized daily earning: dailyMiningRate from DB contains base + all plan bonuses + referral bonuses
   const totalDailyEarning = useMemo(() => {
-    const planBonus = purchasedPlanIds.reduce((sum, id) => {
-      const p = DEPOSIT_PLANS.find(plan => plan.id === id);
-      return sum + (p ? p.dailyProfit : 0);
-    }, 0);
-    const base = dailyMiningRate || BASE_DAILY;
-    return Number((base + planBonus).toFixed(4));
-  }, [purchasedPlanIds, dailyMiningRate]);
+    const rate = Number(dailyMiningRate) || BASE_DAILY;
+    return Number(rate.toFixed(4));
+  }, [dailyMiningRate]);
 
-  // Stacking hashrate: base + every purchased plan's hashrate
+  // Synchronized hashrate: userHashrate from DB contains base + all plan bonuses + referral bonuses
   const totalHashrate = useMemo(() => {
-    const planBonusGh = purchasedPlanIds.reduce((sum, id) => {
-      const p = DEPOSIT_PLANS.find(plan => plan.id === id);
-      if (!p) return sum;
-      const val = parseFloat(p.hashrate.replace(/[^0-9.]/g, '')) || 0;
-      return sum + val;
-    }, 0);
-    const total = BASE_HASHRATE + planBonusGh;
-    return `${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GH/s`;
-  }, [purchasedPlanIds]);
+    const rate = Number(userHashrate) || BASE_HASHRATE;
+    return `${rate.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GH/s`;
+  }, [userHashrate]);
 
   const hasNotifiedClaimRef = useRef(false);
   const hasNotifiedStoppedRef = useRef(false);
@@ -450,6 +464,7 @@ export function App() {
     }
 
     const updateMiningTick = () => {
+      if (isClaimingRef.current) return;
       const now = Date.now();
       const elapsed = now - miningStartTime;
 
@@ -512,33 +527,63 @@ export function App() {
   };
 
   // Claim mined balance during active session (Requires minimum 0.01 USDT)
-  const handleClaim = () => {
-    if (minedBalance < MIN_CLAIM_AMOUNT || isClaiming) return;
+  const handleClaim = async () => {
+    if (minedBalance < MIN_CLAIM_AMOUNT || isClaiming || isClaimingRef.current) return;
+    isClaimingRef.current = true;
     setIsClaiming(true);
     triggerHaptic('medium');
 
     const claimedAmt = minedBalance;
-    setTimeout(() => {
-      // 1. Credit to Main Wallet Balance
-      setWalletBalance((prev) => {
-        const next = prev + claimedAmt;
-        localStorage.setItem('usdt_wallet_balance', next.toFixed(6));
-        return next;
+    const actualUserId = user?.id || '987654321';
+
+    try {
+      const res = await fetch('/api/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: actualUserId,
+          amount: claimedAmt,
+          restart: false
+        })
       });
 
-      // 2. Add to claimed amount in current 24h cycle
-      setClaimedInSession((prev) => {
-        const next = prev + claimedAmt;
-        localStorage.setItem('usdt_claimed_in_session', next.toString());
-        return next;
-      });
+      const data = await res.json();
 
-      // 3. Reset active uncollected balance to 0
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || data.error || 'Claim failed');
+      }
+
+      // Update state directly from verified server response
+      const updatedUser = data.user || {};
+      const newWalletBal = data.walletBalance !== undefined
+        ? Number(data.walletBalance)
+        : (updatedUser.wallet_balance !== undefined ? Number(updatedUser.wallet_balance) : (walletBalance + claimedAmt));
+
+      setWalletBalance(newWalletBal);
+      localStorage.setItem('usdt_wallet_balance', newWalletBal.toFixed(6));
+
+      if (updatedUser.claimed_in_session !== undefined) {
+        const nextClaimed = Number(updatedUser.claimed_in_session);
+        setClaimedInSession(nextClaimed);
+        localStorage.setItem('usdt_claimed_in_session', nextClaimed.toString());
+      } else {
+        setClaimedInSession((prev) => {
+          const next = prev + claimedAmt;
+          localStorage.setItem('usdt_claimed_in_session', next.toString());
+          return next;
+        });
+      }
+
+      if (updatedUser.is_mining_active !== undefined) {
+        setIsMiningActive(Boolean(updatedUser.is_mining_active));
+        localStorage.setItem('usdt_is_mining_active', updatedUser.is_mining_active ? 'true' : 'false');
+      }
+
+      // Reset active uncollected balance to 0
       setMinedBalance(0);
       localStorage.setItem('usdt_mined_balance', '0');
-      setIsClaiming(false);
-      triggerHaptic('success');
 
+      triggerHaptic('success');
       try {
         confetti({
           particleCount: 45,
@@ -548,9 +593,11 @@ export function App() {
       } catch (e) {}
 
       const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const actualClaimed = (claimedAmt > 0) ? claimedAmt : MIN_CLAIM_AMOUNT;
+
       const newTx = {
         type: 'claim',
-        amount: claimedAmt,
+        amount: actualClaimed,
         network: 'Internal Mining Pool',
         date: timeStr,
         status: 'Completed'
@@ -562,34 +609,21 @@ export function App() {
         type: 'mining',
         title: 'Mining Reward',
         subtitle: 'Claimed to Main Balance',
-        amount: `+${claimedAmt.toFixed(6)} USDT`,
+        amount: `+${actualClaimed.toFixed(6)} USDT`,
         time: timeStr
       };
       setActivities((prev) => [newActivity, ...prev]);
 
-      fetch('/api/claim', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user?.id || '987654321',
-          amount: claimedAmt,
-          restart: false
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.success && data.user) {
-          setWalletBalance(Number(data.user.wallet_balance));
-        }
-      })
-      .catch(err => console.log('Notice saving claim to DB:', err.message));
-
-      showToast(
-        lang === 'bn'
-          ? `+${claimedAmt.toFixed(4)} USDT ওয়ালেটে ট্রান্সফার হয়েছে!`
-          : `+${claimedAmt.toFixed(4)} USDT claimed to Main Balance!`
-      );
-    }, 600);
+      showToast(`+${actualClaimed.toFixed(4)} USDT claimed to Main Balance!`);
+    } catch (err) {
+      console.error('Claim error:', err);
+      showToast(err.message || 'Claim failed, please try again');
+      // Re-synchronize with server to restore authoritative state
+      syncWithDb(false);
+    } finally {
+      isClaimingRef.current = false;
+      setIsClaiming(false);
+    }
   };
 
   // Start fresh 24-hour mining cycle (or claim remaining and restart)
@@ -622,7 +656,11 @@ export function App() {
     .then(res => res.json())
     .then(data => {
       if (data && data.success && data.user) {
-        setWalletBalance(Number(data.user.wallet_balance));
+        if (data.user.wallet_balance !== undefined) {
+          const bal = Number(data.user.wallet_balance);
+          setWalletBalance(bal);
+          localStorage.setItem('usdt_wallet_balance', bal.toFixed(6));
+        }
         if (data.user.mining_started_at) {
           const s = new Date(data.user.mining_started_at).getTime();
           setMiningStartTime(s);
@@ -632,11 +670,7 @@ export function App() {
     })
     .catch(err => console.log('Notice starting mining in DB:', err.message));
 
-    showToast(
-      lang === 'bn'
-        ? `⚡ ২৪ ঘণ্টার ইউএসডিটি মাইনিং শুরু হয়েছে! (নূন্যতম ক্লেইম $০.০১)`
-        : `⚡ 24-hour USDT mining started! (Min claim $0.01)`
-    );
+    showToast(`⚡ 24-hour USDT mining started! (Min claim $0.01)`);
 
     triggerHaptic('success');
     try {
@@ -690,6 +724,12 @@ export function App() {
           if (Array.isArray(buyData.user.purchased_plans)) {
             setPurchasedPlanIds(buyData.user.purchased_plans);
           }
+          if (buyData.user.daily_mining_rate !== undefined) {
+            setDailyMiningRate(Number(buyData.user.daily_mining_rate));
+          }
+          if (buyData.user.hashrate !== undefined) {
+            setUserHashrate(Number(buyData.user.hashrate));
+          }
           activatedPlanName = targetPlan.name;
         }
       } catch (err) {
@@ -720,17 +760,9 @@ export function App() {
     setActivities((prev) => [newActivity, ...prev]);
 
     if (activatedPlanName) {
-      showToast(
-        lang === 'bn' 
-          ? `+${amt.toFixed(2)} USDT ডিপোজিট হয়েছে ও ${activatedPlanName} চালু হয়েছে!` 
-          : `+${amt.toFixed(2)} USDT deposited & ${activatedPlanName} activated!`
-      );
+      showToast(`+${amt.toFixed(2)} USDT deposited & ${activatedPlanName} activated!`);
     } else {
-      showToast(
-        lang === 'bn' 
-          ? `+${amt.toFixed(2)} USDT ডিপোজিট ব্যালেন্সে সফলভাবে জমা হয়েছে!` 
-          : `+${amt.toFixed(2)} USDT credited to Deposit Balance!`
-      );
+      showToast(`+${amt.toFixed(2)} USDT credited to Deposit Balance!`);
     }
 
     syncWithDb(false);
@@ -756,7 +788,7 @@ export function App() {
 
         const data = await response.json();
         if (!response.ok || !data.success) {
-          showToast(data.message || (lang === 'bn' ? 'প্ল্যান কেনার সময় সমস্যা হয়েছে।' : 'Failed to purchase plan'));
+          showToast(data.message || 'Failed to purchase plan');
           return;
         }
 
@@ -772,6 +804,12 @@ export function App() {
         } else if (!purchasedPlanIds.includes(plan.id)) {
           setPurchasedPlanIds([...purchasedPlanIds, plan.id]);
         }
+        if (data.user?.daily_mining_rate !== undefined) {
+          setDailyMiningRate(Number(data.user.daily_mining_rate));
+        }
+        if (data.user?.hashrate !== undefined) {
+          setUserHashrate(Number(data.user.hashrate));
+        }
 
         const timeStr = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
         setTransactions((prev) => [
@@ -785,27 +823,19 @@ export function App() {
           ...prev
         ]);
 
-        showToast(
-          lang === 'bn' 
-            ? `${plan.name} ($${plan.price}) কেনা হয়েছে! ডিপোজিট ব্যালেন্স থেকে -$${plan.price} কাটা হয়েছে।` 
-            : `${plan.name} ($${plan.price}) purchased! -$${plan.price} deducted from Deposit Balance.`
-        );
+        showToast(`${plan.name} ($${plan.price}) purchased! -$${plan.price} deducted from Deposit Balance.`);
 
         syncWithDb(false);
       } catch (err) {
         console.error('Error buying plan:', err);
-        showToast(lang === 'bn' ? 'সার্ভারে সংযোগ করতে সমস্যা হয়েছে।' : 'Network error purchasing plan');
+        showToast('Network error purchasing plan');
       }
     } else {
       // Insufficient deposit balance - Main balance is NOT permitted for plans
       setPendingPlanToActivate(plan);
       setDepositPreloadedAmount(plan.price);
       setIsDepositOpen(true);
-      showToast(
-        lang === 'bn' 
-          ? `মেইন ব্যালেন্স দিয়ে প্ল্যান কেনা যাবে না। $${plan.price} ডিপোজিট করে ${plan.name} চালু করুন` 
-          : `Plans can only be bought with Deposit Balance. Deposit $${plan.price} to activate ${plan.name}`
-      );
+      showToast(`Plans can only be bought with Deposit Balance. Deposit $${plan.price} to activate ${plan.name}`);
     }
   };
 
@@ -838,7 +868,7 @@ export function App() {
       if (!response.ok || !data.success) {
         return {
           success: false,
-          message: data.message || (lang === 'bn' ? 'উইথড্র প্রক্রিয়াকরণে সমস্যা হয়েছে।' : 'Withdrawal failed')
+          message: data.message || 'Withdrawal failed'
         };
       }
 
@@ -894,11 +924,7 @@ export function App() {
         }
       } catch {}
 
-      showToast(
-        lang === 'bn'
-          ? `উইথড্র রিকোয়েস্ট জমা হয়েছে! অ্যাকাউন্ট হিস্টোরিতে স্ট্যাটাস পেন্ডিং রয়েছে।`
-          : `Withdrawal request submitted! Status is pending in Account History.`
-      );
+      showToast('Withdrawal request submitted! Status is pending in Account History.');
 
       return {
         success: true,
@@ -908,7 +934,7 @@ export function App() {
       console.error('Withdraw submit error:', err);
       return {
         success: false,
-        message: err.message || (lang === 'bn' ? 'সার্ভারের সাথে সংযোগ বিচ্ছিন্ন হয়েছে।' : 'Network connection error')
+        message: err.message || 'Network connection error'
       };
     }
   };
@@ -976,7 +1002,7 @@ export function App() {
               <div className="overview-header">
                 <span className="overview-title">
                   <ShieldCheck size={16} color="#10b981" />
-                  {lang === 'bn' ? 'ইউএসডিটি মাইনিং সারসংক্ষেপ' : 'USDT Mining Overview'}
+                  USDT Mining Overview
                 </span>
                 <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 700 }}>
                   Active 24/7
@@ -985,7 +1011,7 @@ export function App() {
 
               <div className="overview-grid">
                 <div className="overview-box">
-                  <span className="overview-box-label">{lang === 'bn' ? 'মেইন ব্যালেন্স' : (t.mainBalance || 'Main Balance')}</span>
+                  <span className="overview-box-label">{t.mainBalance || 'Main Balance'}</span>
                   <div className="overview-box-val" style={{ color: '#0f172a' }}>
                     ${formatUSDT(walletBalance)}
                   </div>
@@ -993,7 +1019,7 @@ export function App() {
 
                 <div className="overview-box overview-box-highlight">
                   <span className="overview-box-label overview-label-highlight">
-                    {lang === 'bn' ? 'ডিপোজিট ব্যালেন্স' : 'Deposit Balance'}
+                    Deposit Balance
                   </span>
                   <div className="overview-box-val overview-val-highlight">
                     {formatUSDT(depositBalance)} USDT
@@ -1001,7 +1027,7 @@ export function App() {
                 </div>
 
                 <div className="overview-box">
-                  <span className="overview-box-label">{lang === 'bn' ? 'মোট উইথড্র' : (t.totalWithdraw || 'Total Withdraw')}</span>
+                  <span className="overview-box-label">{t.totalWithdraw || 'Total Withdraw'}</span>
                   <div className="overview-box-val" style={{ color: '#10b981' }}>
                     {formatUSDT(totalWithdraw)} USDT
                   </div>
