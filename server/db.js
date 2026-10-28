@@ -914,20 +914,24 @@ async function adjustUserBalance(telegramId, amount, type = 'wallet_balance') {
   const column = type === 'deposit_balance' ? 'deposit_balance' : 'wallet_balance';
   const extraDepositUpdate = (type === 'deposit_balance' && num > 0) ? ', total_deposit = total_deposit + $1' : '';
 
+  const cleanId = (telegramId || '').toString().trim().replace(/^@/, '');
   const res = await pool.query(
     `UPDATE users 
      SET ${column} = GREATEST(0, ${column} + $1)${extraDepositUpdate},
          updated_at = NOW() 
-     WHERE telegram_id = $2 
+     WHERE telegram_id = $2 OR LOWER(username) = LOWER($2)
      RETURNING *`,
-    [num, telegramId.toString()]
+    [num, cleanId]
   );
 
-  if (res.rows.length === 0) throw new Error('User not found in database');
+  if (res.rows.length === 0) throw new Error(`User "${cleanId}" not found in database`);
+
+  const updatedUser = res.rows[0];
+  const realTelegramId = updatedUser.telegram_id;
 
   // Record audit transaction
   await addTransaction({
-    telegramId: telegramId.toString(),
+    telegramId: realTelegramId.toString(),
     type: type === 'deposit_balance' ? 'deposit' : 'bonus',
     amount: Math.abs(num),
     network: 'Admin Adjustment',
@@ -935,7 +939,7 @@ async function adjustUserBalance(telegramId, amount, type = 'wallet_balance') {
     note: `Admin ${num >= 0 ? 'credited' : 'debited'} $${Math.abs(num).toFixed(2)} USDT to ${type === 'deposit_balance' ? 'Deposit' : 'Wallet'} Balance`
   });
 
-  return res.rows[0];
+  return updatedUser;
 }
 
 // Admin Helper: Gift a Mining Plan directly to a user

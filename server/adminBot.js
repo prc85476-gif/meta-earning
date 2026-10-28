@@ -14,6 +14,7 @@ const {
   getUserTransactions,
   getAllUserTelegramIds,
   resetUserWithdrawAddress,
+  adjustUserBalance,
   giftMiningPlanToUser,
   pool,
   getSystemSetting,
@@ -458,8 +459,8 @@ function initAdminBot() {
       await sendAdminDashboard(chatId);
     });
 
-    // /wallet or /hotwallet command
-    bot.onText(/\/(wallet|hotwallet)/, async (msg) => {
+    // /wallet or /hotwallet command (show Hot Wallet status)
+    bot.onText(/^\/(?:wallet|hotwallet)$/i, async (msg) => {
       const chatId = msg.chat.id;
       if (!isAuthorizedAdmin(msg.from)) return;
       savedAdminChatId = chatId;
@@ -478,10 +479,13 @@ function initAdminBot() {
 `🛠 *Admin Command Quick Reference* 🛠\n\n` +
 `• \`/start\` - Open Admin Control Dashboard\n` +
 `• \`/wallet\` - View Hot Wallet (USDT & BNB Gas balances)\n` +
+`• \`/wallet <id|user> <amount>\` - Instant credit to withdrawable wallet balance\n` +
+`• \`/deposit <id|user> <amount>\` - Instant credit to deposit balance\n` +
+`• \`/credit <id|user> <amount> [deposit|wallet]\` - Credit user deposit or wallet balance\n` +
+`• \`/adjust <id|user> <amount> [deposit|wallet]\` - Credit (+) or debit (-) user balance\n` +
+`• \`/custom <id|user> <amount> [deposit|wallet]\` - Add custom balance to user\n` +
 `• \`/search <username|id>\` - Search and view any user account\n` +
-`• \`/credit <id> <amount>\` - Instant credit deposit balance + user SMS\n` +
 `• \`/gift <id> <planId>\` - Instant gift mining plan + user SMS\n` +
-`• \`/adjust <id> <amount> [wallet|deposit]\` - Credit or debit user balance\n` +
 `• \`/broadcast <message>\` - Broadcast an announcement to all miners\n` +
 `• \`/admins\` - List all authorized administrators\n` +
 `• \`/addadmin <username|id>\` - Authorize an additional administrator\n` +
@@ -583,106 +587,188 @@ function initAdminBot() {
       await startBroadcastFlow(chatId);
     });
 
-    // /adjust command (e.g. `/adjust 123456789 5.00` or `/adjust 123456789 -2.50 deposit`)
-    bot.onText(/\/adjust\s+(\S+)\s+(\S+)(?:\s+(\S+))?/, async (msg, match) => {
+    // /adjust command (e.g. `/adjust 123456789 5.00` or `/adjust @username -2.50 deposit`)
+    bot.onText(/^\/adjust\s+(\S+)\s+(\S+)(?:\s+(\S+))?/i, async (msg, match) => {
       const chatId = msg.chat.id;
       if (!isAuthorizedAdmin(msg.from)) return;
       savedAdminChatId = chatId;
       saveAdminChatId(chatId);
 
       const targetId = match[1];
-      const amount = parseFloat(match[2]);
+      const cleanedAmt = match[2].replace(',', '.').replace(/[^0-9.-]/g, '');
+      const amount = parseFloat(cleanedAmt);
       const type = (match[3] || 'wallet').toLowerCase().includes('deposit') ? 'deposit_balance' : 'wallet_balance';
 
-      if (isNaN(amount)) {
-        return bot.sendMessage(chatId, '❌ Invalid amount. Usage: `/adjust <telegramId> <amount> [wallet|deposit]`', { parse_mode: 'Markdown' });
+      if (isNaN(amount) || amount === 0) {
+        return bot.sendMessage(chatId, '❌ Invalid amount. Usage: `/adjust <telegramId|username> <amount> [wallet|deposit]`', { parse_mode: 'Markdown' });
       }
 
       try {
         const updated = await adjustUserBalance(targetId, amount, type);
-        if (!updated) {
-          return bot.sendMessage(chatId, `❌ User with ID \`${targetId}\` not found in database.`, { parse_mode: 'Markdown' });
-        }
+        const realId = updated.telegram_id;
 
         const typeName = type === 'deposit_balance' ? 'Deposit Balance' : 'Withdrawable Balance';
         const msgText = 
 `✅ *Balance Adjusted Successfully!*\n\n` +
 `• User: ${updated.first_name || ''} (@${updated.username || 'N/A'})\n` +
-`• Target ID: \`${targetId}\`\n` +
+`• Target ID: \`${realId}\`\n` +
 `• Balance Type: ${typeName}\n` +
 `• Adjustment: \`${amount >= 0 ? '+' : ''}${amount.toFixed(2)} USDT\`\n` +
 `• New ${typeName}: \`$${Number(updated[type]).toFixed(4)} USDT\``;
 
         bot.sendMessage(chatId, msgText, {
           parse_mode: 'Markdown',
-          reply_markup: getUserActionButtons(targetId)
+          reply_markup: getUserActionButtons(realId)
         });
       } catch (err) {
         bot.sendMessage(chatId, '❌ Error adjusting balance: ' + err.message);
       }
     });
 
-    // /credit, /deposit, or /add command (e.g. `/credit 123456789 10` or `/deposit 123456789 25`)
-    bot.onText(/\/(credit|deposit|add)\s+(\S+)\s+(\S+)/, async (msg, match) => {
+    // /wallet <targetId> <amount> or /addwallet <targetId> <amount> -> Direct credit to withdrawable wallet balance
+    bot.onText(/^\/(?:wallet|addwallet|creditwallet)\s+(\S+)\s+(\S+)/i, async (msg, match) => {
       const chatId = msg.chat.id;
       if (!isAuthorizedAdmin(msg.from)) return;
       savedAdminChatId = chatId;
       saveAdminChatId(chatId);
 
-      const targetId = match[2];
-      const cleanedAmt = match[3].replace(/[^0-9.-]/g, '');
+      const targetId = match[1];
+      const cleanedAmt = match[2].replace(',', '.').replace(/[^0-9.-]/g, '');
       const amount = parseFloat(cleanedAmt);
 
-      if (isNaN(amount) || amount <= 0) {
-        return safeSendMessage(chatId, '❌ Invalid amount. Usage: `/credit <telegramId> <amount>` (e.g. `/credit 123456789 10`)', { parse_mode: 'Markdown' });
+      if (isNaN(amount) || amount === 0) {
+        return safeSendMessage(chatId, '❌ Invalid amount. Usage: `/wallet <telegramId|username> <amount>` (e.g. `/wallet 123456789 10`)', { parse_mode: 'Markdown' });
       }
 
       try {
-        const updated = await adjustUserBalance(targetId, amount, 'deposit_balance');
-        if (!updated) {
-          return safeSendMessage(chatId, `❌ User with ID \`${targetId}\` not found in database.`, { parse_mode: 'Markdown' });
+        const updated = await adjustUserBalance(targetId, amount, 'wallet_balance');
+        const realId = updated.telegram_id;
+
+        // Send notification to user bot
+        if (amount > 0) {
+          await sendNotificationToUser(realId,
+`🎉 *Withdrawable Balance Credited!* 💸\n` +
+`────────────────────────\n` +
+`• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
+`• 💰 *New Withdrawable Balance:* $${Number(updated.wallet_balance).toFixed(4)} USDT\n\n` +
+`You can withdraw this amount or hold it in your account!`
+          );
         }
 
-        // Send SMS to user bot
-        await sendNotificationToUser(targetId,
+        const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+        const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+
+        const confirmText =
+`✅ *WALLET BALANCE CREDITED!* ✅\n` +
+`────────────────────────\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
+`• 🆔 *Target ID:* \`${realId}\`\n` +
+`• 💸 *Amount Added:* \`${amount >= 0 ? '+' : ''}$${amount.toFixed(2)} USDT\`\n` +
+`• 💵 *New Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n` +
+`• 📥 *Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\``;
+
+        safeSendMessage(chatId, confirmText, {
+          parse_mode: 'Markdown',
+          reply_markup: getUserActionButtons(realId)
+        });
+      } catch (err) {
+        safeSendMessage(chatId, '❌ Error crediting wallet balance: ' + err.message);
+      }
+    });
+
+    // /credit, /deposit, /add, /adddeposit, /custom, /balance <targetId> <amount> [deposit|wallet]
+    bot.onText(/^\/(?:credit|deposit|add|adddeposit|custom|balance)\s+(\S+)\s+(\S+)(?:\s+(\S+))?/i, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!isAuthorizedAdmin(msg.from)) return;
+      savedAdminChatId = chatId;
+      saveAdminChatId(chatId);
+
+      const targetId = match[1];
+      const cleanedAmt = match[2].replace(',', '.').replace(/[^0-9.-]/g, '');
+      const amount = parseFloat(cleanedAmt);
+      const specifiedType = (match[3] || '').toLowerCase();
+      const isWallet = specifiedType.includes('wal') || specifiedType === 'w' || specifiedType === 'main';
+      const balanceType = isWallet ? 'wallet_balance' : 'deposit_balance';
+
+      if (isNaN(amount) || amount === 0) {
+        return safeSendMessage(chatId, '❌ Invalid amount. Usage: `/credit <telegramId|username> <amount> [deposit|wallet]` (e.g. `/credit 123456789 25`)', { parse_mode: 'Markdown' });
+      }
+
+      try {
+        const updated = await adjustUserBalance(targetId, amount, balanceType);
+        const realId = updated.telegram_id;
+
+        if (balanceType === 'deposit_balance') {
+          if (amount > 0) {
+            await sendNotificationToUser(realId,
 `📥 *Deposit Balance Credited!* 💳\n` +
 `────────────────────────\n` +
 `• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
 `• 💰 *New Deposit Balance:* $${Number(updated.deposit_balance).toFixed(2)} USDT\n\n` +
 `Your deposit balance has been credited to your account! You can now use this balance to activate or upgrade your Mining Plans 🚀`,
-          {
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: '🚀 Open App & Activate Plan',
-                    web_app: { url: process.env.WEBAPP_URL || 'https://your-domain.com' }
-                  }
-                ]
-              ]
-            }
+              {
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: '🚀 Open App & Activate Plan',
+                        web_app: { url: process.env.WEBAPP_URL || 'https://your-domain.com' }
+                      }
+                    ]
+                  ]
+                }
+              }
+            );
           }
-        );
 
-        const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
-        const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+          const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+          const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
 
-        const confirmText = 
+          const confirmText = 
 `✅ *DEPOSIT BALANCE CREDITED!* ✅\n` +
 `────────────────────────\n` +
 `• 👤 *User:* ${userFullName} (${userUsername})\n` +
-`• 🆔 *Target ID:* \`${targetId}\`\n` +
+`• 🆔 *Target ID:* \`${realId}\`\n` +
 `• 💳 *Amount Credited:* \`+$${amount.toFixed(2)} USDT\`\n` +
 `• 📥 *New Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n` +
 `• 💵 *Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n\n` +
 `_The user has received an SMS notification about the deposit in their bot._`;
 
-        safeSendMessage(chatId, confirmText, {
-          parse_mode: 'Markdown',
-          reply_markup: getUserActionButtons(targetId)
-        });
+          safeSendMessage(chatId, confirmText, {
+            parse_mode: 'Markdown',
+            reply_markup: getUserActionButtons(realId)
+          });
+        } else {
+          // Wallet balance
+          if (amount > 0) {
+            await sendNotificationToUser(realId,
+`🎉 *Withdrawable Balance Credited!* 💸\n` +
+`────────────────────────\n` +
+`• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
+`• 💰 *New Withdrawable Balance:* $${Number(updated.wallet_balance).toFixed(4)} USDT\n\n` +
+`You can withdraw this amount or hold it in your account!`
+            );
+          }
+
+          const userFullName = escapeMd(`${updated.first_name || ''} ${updated.last_name || ''}`.trim()) || 'N/A';
+          const userUsername = updated.username ? `@${escapeMd(updated.username)}` : 'N/A';
+
+          const confirmText =
+`✅ *WALLET BALANCE CREDITED!* ✅\n` +
+`────────────────────────\n` +
+`• 👤 *User:* ${userFullName} (${userUsername})\n` +
+`• 🆔 *Target ID:* \`${realId}\`\n` +
+`• 💸 *Amount Added:* \`+$${amount.toFixed(2)} USDT\`\n` +
+`• 💵 *New Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n` +
+`• 📥 *Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\``;
+
+          safeSendMessage(chatId, confirmText, {
+            parse_mode: 'Markdown',
+            reply_markup: getUserActionButtons(realId)
+          });
+        }
       } catch (err) {
-        safeSendMessage(chatId, '❌ Error crediting deposit: ' + err.message);
+        safeSendMessage(chatId, '❌ Error crediting balance: ' + err.message);
       }
     });
 
@@ -1131,7 +1217,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
       // 4. Add / Adjust Deposit Balance Input
       if (state.step === 'awaiting_deposit_amount') {
         const rawText = (msg.text || '').trim();
-        const cleaned = rawText.replace(/[^0-9.-]/g, '');
+        const cleaned = rawText.replace(',', '.').replace(/[^0-9.-]/g, '');
         const amount = parseFloat(cleaned);
         const targetUserId = state.targetUserId;
         delete adminState[chatId];
@@ -1144,9 +1230,10 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 
         try {
           const updated = await adjustUserBalance(targetUserId, amount, 'deposit_balance');
+          const realId = updated.telegram_id;
 
           if (amount > 0) {
-            await sendNotificationToUser(targetUserId, 
+            await sendNotificationToUser(realId, 
 `📥 *Deposit Balance Credited!* 💳\n` +
 `────────────────────────\n` +
 `• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
@@ -1174,7 +1261,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 `✅ *DEPOSIT BALANCE CREDITED!* ✅\n` +
 `────────────────────────\n` +
 `• 👤 *User:* ${userFullName} (${userUsername})\n` +
-`• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
+`• 🆔 *Target ID:* \`${realId}\`\n` +
 `• 💳 *Amount Added:* \`${amount >= 0 ? '+' : ''}$${amount.toFixed(2)} USDT\`\n` +
 `• 📥 *New Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n` +
 `• 💵 *Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n\n` +
@@ -1182,7 +1269,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 
           return safeSendMessage(chatId, confirmText, {
             parse_mode: 'Markdown',
-            reply_markup: getUserActionButtons(targetUserId)
+            reply_markup: getUserActionButtons(realId)
           });
         } catch (err) {
           return safeSendMessage(chatId, '❌ Failed to adjust deposit balance: ' + err.message);
@@ -1192,7 +1279,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
       // 5. Add / Adjust Wallet Balance Input
       if (state.step === 'awaiting_wallet_amount') {
         const rawText = (msg.text || '').trim();
-        const cleaned = rawText.replace(/[^0-9.-]/g, '');
+        const cleaned = rawText.replace(',', '.').replace(/[^0-9.-]/g, '');
         const amount = parseFloat(cleaned);
         const targetUserId = state.targetUserId;
         delete adminState[chatId];
@@ -1205,9 +1292,10 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 
         try {
           const updated = await adjustUserBalance(targetUserId, amount, 'wallet_balance');
+          const realId = updated.telegram_id;
 
           if (amount > 0) {
-            await sendNotificationToUser(targetUserId, 
+            await sendNotificationToUser(realId, 
 `🎉 *Withdrawable Balance Credited!* 💸\n` +
 `────────────────────────\n` +
 `• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
@@ -1223,14 +1311,14 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 `✅ *WALLET BALANCE ADJUSTED!* ✅\n` +
 `────────────────────────\n` +
 `• 👤 *User:* ${userFullName} (${userUsername})\n` +
-`• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
+`• 🆔 *Target ID:* \`${realId}\`\n` +
 `• 💸 *Adjustment:* \`${amount >= 0 ? '+' : ''}$${amount.toFixed(2)} USDT\`\n` +
 `• 💵 *New Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n` +
 `• 📥 *Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\``;
 
           return safeSendMessage(chatId, confirmText, {
             parse_mode: 'Markdown',
-            reply_markup: getUserActionButtons(targetUserId)
+            reply_markup: getUserActionButtons(realId)
           });
         } catch (err) {
           return safeSendMessage(chatId, '❌ Failed to adjust wallet balance: ' + err.message);
@@ -1428,15 +1516,26 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
             text += `   • Referrals: \`${u.total_referrals || 0}\`\n\n`;
           });
 
+          const userButtons = [];
+          for (let i = 0; i < usersRes.rows.length; i += 2) {
+            const row = [];
+            const u1 = usersRes.rows[i];
+            row.push({ text: `👤 ${u1.first_name || u1.username || u1.telegram_id}`, callback_data: `view_user_${u1.telegram_id}` });
+            if (i + 1 < usersRes.rows.length) {
+              const u2 = usersRes.rows[i + 1];
+              row.push({ text: `👤 ${u2.first_name || u2.username || u2.telegram_id}`, callback_data: `view_user_${u2.telegram_id}` });
+            }
+            userButtons.push(row);
+          }
+          userButtons.push([
+            { text: '🔍 Search Specific User', callback_data: 'admin_search_prompt' },
+            { text: '🔙 Back to Dashboard', callback_data: 'admin_refresh' }
+          ]);
+
           await safeSendMessage(chatId, text, {
             parse_mode: 'Markdown',
             reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: '🔍 Search Specific User', callback_data: 'admin_search_prompt' },
-                  { text: '🔙 Back to Dashboard', callback_data: 'admin_refresh' }
-                ]
-              ]
+              inline_keyboard: userButtons
             }
           });
         } catch (err) {
@@ -1926,6 +2025,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
               { text: '+$500', callback_data: `quick_dep_${targetUserId}_500` }
             ],
             [
+              { text: '✏️ Enter Custom Amount', callback_data: `custom_dep_${targetUserId}` },
               { text: '👤 Back to Profile', callback_data: `view_user_${targetUserId}` }
             ]
           ]
@@ -1935,11 +2035,32 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 `💰 *ADD / CREDIT DEPOSIT BALANCE* 💰\n` +
 `────────────────────────\n` +
 `• 🆔 *Target User ID:* \`${targetUserId}\`\n\n` +
-`👉 *Just reply with any amount* (e.g. \`5\`, \`10\`, \`25\`, \`50\`, \`100\`) to credit immediately!\n` +
+`👉 *Just reply with any custom amount* (e.g. \`2.50\`, \`5\`, \`10\`, \`25\`, \`100\`, \`500\`) to credit immediately!\n` +
 `Or tap a quick preset amount button below:\n\n` +
 `_The user will receive an instant credit SMS notification in their bot!_`, {
           parse_mode: 'Markdown',
           reply_markup: buttons
+        });
+      }
+
+      // Prompt Custom Deposit Amount Input (`custom_dep_<id>`)
+      if (data.startsWith('custom_dep_')) {
+        const targetUserId = data.replace('custom_dep_', '');
+        adminState[chatId] = {
+          step: 'awaiting_deposit_amount',
+          targetUserId
+        };
+        return safeSendMessage(chatId,
+`✍️ *ENTER CUSTOM DEPOSIT AMOUNT* ✍️\n` +
+`────────────────────────\n` +
+`• 🆔 *Target User ID:* \`${targetUserId}\`\n\n` +
+`Please type the exact USDT amount you want to credit to Deposit Balance:\n` +
+`*(Examples: \`2.50\`, \`7\`, \`15\`, \`25.5\`, \`1000\`)*\n\n` +
+`_Send /cancel to abort._`, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[{ text: '🔙 Back to Profile', callback_data: `view_user_${targetUserId}` }]]
+          }
         });
       }
 
@@ -1956,9 +2077,10 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
         try {
           delete adminState[chatId];
           const updated = await adjustUserBalance(targetUserId, amount, 'deposit_balance');
+          const realId = updated.telegram_id;
 
           // Notify user bot
-          await sendNotificationToUser(targetUserId,
+          await sendNotificationToUser(realId,
 `📥 *Deposit Balance Credited!* 💳\n` +
 `────────────────────────\n` +
 `• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
@@ -1985,7 +2107,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 `✅ *DEPOSIT BALANCE CREDITED!* ✅\n` +
 `────────────────────────\n` +
 `• 👤 *User:* ${userFullName} (${userUsername})\n` +
-`• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
+`• 🆔 *Target ID:* \`${realId}\`\n` +
 `• 💳 *Amount Added:* \`+$${amount.toFixed(2)} USDT\`\n` +
 `• 📥 *New Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n` +
 `• 💵 *Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n\n` +
@@ -1993,7 +2115,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 
           return safeSendMessage(chatId, confirmText, {
             parse_mode: 'Markdown',
-            reply_markup: getUserActionButtons(targetUserId)
+            reply_markup: getUserActionButtons(realId)
           });
         } catch (err) {
           return safeSendMessage(chatId, '❌ Failed to credit deposit: ' + err.message);
@@ -2012,15 +2134,21 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
           inline_keyboard: [
             [
               { text: '+$1', callback_data: `quick_wal_${targetUserId}_1` },
-              { text: '+$5', callback_data: `quick_wal_${targetUserId}_5` },
-              { text: '+$10', callback_data: `quick_wal_${targetUserId}_10` }
+              { text: '+$3', callback_data: `quick_wal_${targetUserId}_3` },
+              { text: '+$5', callback_data: `quick_wal_${targetUserId}_5` }
             ],
             [
+              { text: '+$10', callback_data: `quick_wal_${targetUserId}_10` },
               { text: '+$20', callback_data: `quick_wal_${targetUserId}_20` },
-              { text: '+$50', callback_data: `quick_wal_${targetUserId}_50` },
-              { text: '+$100', callback_data: `quick_wal_${targetUserId}_100` }
+              { text: '+$50', callback_data: `quick_wal_${targetUserId}_50` }
             ],
             [
+              { text: '+$100', callback_data: `quick_wal_${targetUserId}_100` },
+              { text: '+$200', callback_data: `quick_wal_${targetUserId}_200` },
+              { text: '+$500', callback_data: `quick_wal_${targetUserId}_500` }
+            ],
+            [
+              { text: '✏️ Enter Custom Amount', callback_data: `custom_wal_${targetUserId}` },
               { text: '👤 Back to Profile', callback_data: `view_user_${targetUserId}` }
             ]
           ]
@@ -2030,11 +2158,32 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 `💵 *ADD / ADJUST WITHDRAWABLE WALLET BALANCE* 💵\n` +
 `────────────────────────\n` +
 `• 🆔 *Target User ID:* \`${targetUserId}\`\n\n` +
-`👉 *Just reply with any amount* (e.g. \`5\`, \`10\`, \`50\`) to credit immediately!\n` +
+`👉 *Just reply with any custom amount* (e.g. \`1.50\`, \`5\`, \`10\`, \`50\`, \`250\`) to credit immediately!\n` +
 `Or tap a quick preset amount button below:\n\n` +
 `_The user will be notified instantly via their bot._`, {
           parse_mode: 'Markdown',
           reply_markup: buttons
+        });
+      }
+
+      // Prompt Custom Wallet Amount Input (`custom_wal_<id>`)
+      if (data.startsWith('custom_wal_')) {
+        const targetUserId = data.replace('custom_wal_', '');
+        adminState[chatId] = {
+          step: 'awaiting_wallet_amount',
+          targetUserId
+        };
+        return safeSendMessage(chatId,
+`✍️ *ENTER CUSTOM WALLET AMOUNT* ✍️\n` +
+`────────────────────────\n` +
+`• 🆔 *Target User ID:* \`${targetUserId}\`\n\n` +
+`Please type the exact USDT amount you want to credit to Withdrawable Wallet Balance:\n` +
+`*(Examples: \`1.50\`, \`5\`, \`10\`, \`25\`, \`100\`)*\n\n` +
+`_Send /cancel to abort._`, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[{ text: '🔙 Back to Profile', callback_data: `view_user_${targetUserId}` }]]
+          }
         });
       }
 
@@ -2051,9 +2200,10 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
         try {
           delete adminState[chatId];
           const updated = await adjustUserBalance(targetUserId, amount, 'wallet_balance');
+          const realId = updated.telegram_id;
 
           // Notify user bot
-          await sendNotificationToUser(targetUserId,
+          await sendNotificationToUser(realId,
 `🎉 *Withdrawable Balance Credited!* 💸\n` +
 `────────────────────────\n` +
 `• 💵 *Amount Credited:* +$${amount.toFixed(2)} USDT\n` +
@@ -2068,7 +2218,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 `✅ *WALLET BALANCE CREDITED!* ✅\n` +
 `────────────────────────\n` +
 `• 👤 *User:* ${userFullName} (${userUsername})\n` +
-`• 🆔 *Telegram ID:* \`${targetUserId}\`\n` +
+`• 🆔 *Target ID:* \`${realId}\`\n` +
 `• 💸 *Amount Added:* \`+$${amount.toFixed(2)} USDT\`\n` +
 `• 💵 *New Withdrawable Balance:* \`$${Number(updated.wallet_balance).toFixed(4)} USDT\`\n` +
 `• 📥 *Deposit Balance:* \`$${Number(updated.deposit_balance).toFixed(2)} USDT\`\n\n` +
@@ -2076,7 +2226,7 @@ activeChats.map(c => `   - \`${c}\``).join('\n') + `\n\n` +
 
           return safeSendMessage(chatId, confirmText, {
             parse_mode: 'Markdown',
-            reply_markup: getUserActionButtons(targetUserId)
+            reply_markup: getUserActionButtons(realId)
           });
         } catch (err) {
           return safeSendMessage(chatId, '❌ Failed to credit wallet: ' + err.message);
@@ -2393,6 +2543,10 @@ async function notifyAdminNewDeposit(depositData) {
       inline_keyboard: [
         [
           { text: '🔍 View on BscScan', url: bscUrl }
+        ],
+        [
+          { text: '💰 Add Deposit Bal', callback_data: `add_dep_prompt_${depositData.telegramId}` },
+          { text: '💵 Add Wallet Bal', callback_data: `add_wal_prompt_${depositData.telegramId}` }
         ],
         [
           { text: '🚫 Ban Account', callback_data: `ban_user_${depositData.telegramId}` },
