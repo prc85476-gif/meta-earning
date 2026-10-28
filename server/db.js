@@ -42,6 +42,14 @@ async function initDatabase() {
         total_referrals INTEGER DEFAULT 0,
         total_referral_bonus NUMERIC(18, 2) DEFAULT 0.00,
         mined_unclaimed NUMERIC(18, 8) DEFAULT 0.00000000,
+        mining_started_at TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+        is_mining_active BOOLEAN DEFAULT FALSE,
+        has_notified_claim_001 BOOLEAN DEFAULT FALSE,
+        has_notified_24h_stopped BOOLEAN DEFAULT FALSE,
+        has_activated_referral BOOLEAN DEFAULT FALSE,
+        photo_url VARCHAR(500) DEFAULT NULL,
+        claimed_in_session NUMERIC(18, 8) DEFAULT 0.00000000,
+        is_banned BOOLEAN DEFAULT FALSE,
         last_active_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -70,6 +78,7 @@ async function initDatabase() {
         referred_username VARCHAR(255) DEFAULT NULL,
         deposit_amount NUMERIC(18, 2) DEFAULT 0.00,
         commission_earned NUMERIC(18, 2) DEFAULT 0.00,
+        has_started_mining BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
