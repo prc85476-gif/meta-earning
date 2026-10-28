@@ -575,8 +575,14 @@ export function App() {
       }
 
       if (updatedUser.is_mining_active !== undefined) {
-        setIsMiningActive(Boolean(updatedUser.is_mining_active));
-        localStorage.setItem('usdt_is_mining_active', updatedUser.is_mining_active ? 'true' : 'false');
+        const active = Boolean(updatedUser.is_mining_active);
+        setIsMiningActive(active);
+        localStorage.setItem('usdt_is_mining_active', active ? 'true' : 'false');
+        if (!active) {
+          setMiningStatus('idle');
+          setMiningStartTime(null);
+          localStorage.removeItem('usdt_mining_start_time');
+        }
       }
 
       // Reset active uncollected balance to 0

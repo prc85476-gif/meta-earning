@@ -129,11 +129,14 @@ app.post('/api/mining/start', async (req, res) => {
       notifyReferrerInviteSuccess(activatedReferrerId, friendName);
     }
 
+    const fullUser = await getUserFullDetails(actualUserId);
+
     res.json({
       success: true,
-      miningStartedAt: updatedUser.mining_started_at,
-      isMiningActive: updatedUser.is_mining_active,
-      user: updatedUser
+      walletBalance: Number(fullUser.wallet_balance),
+      miningStartedAt: fullUser.mining_started_at,
+      isMiningActive: fullUser.is_mining_active,
+      user: fullUser
     });
   } catch (error) {
     console.error('API /api/mining/start error:', error);
@@ -146,20 +149,21 @@ app.post('/api/mining/claim', async (req, res) => {
   try {
     const { userId, amount, restart = false } = req.body;
     const actualUserId = (userId || '987654321').toString();
-    const numAmt = parseFloat(amount);
-    if (isNaN(numAmt) || numAmt <= 0) {
-      return res.status(400).json({ success: false, message: 'Invalid claim amount' });
-    }
+    const numAmt = (amount !== undefined && amount !== null && !isNaN(parseFloat(amount)))
+      ? Math.max(0, parseFloat(amount))
+      : 0;
 
     await getOrCreateUser({ id: actualUserId });
     const updatedUser = await claimMinedReward(actualUserId, numAmt, Boolean(restart));
+    const fullUser = await getUserFullDetails(actualUserId);
 
     res.json({
       success: true,
-      walletBalance: Number(updatedUser.wallet_balance),
-      miningStartedAt: updatedUser.mining_started_at,
-      isMiningActive: updatedUser.is_mining_active,
-      user: updatedUser
+      walletBalance: Number(fullUser.wallet_balance),
+      claimedAmount: Number(updatedUser.claimed_amount || 0),
+      miningStartedAt: fullUser.mining_started_at,
+      isMiningActive: fullUser.is_mining_active,
+      user: fullUser
     });
   } catch (error) {
     console.error('API /api/mining/claim error:', error);
@@ -199,20 +203,21 @@ app.post('/api/claim', async (req, res) => {
   try {
     const { userId, amount, restart = false } = req.body;
     const actualUserId = (userId || '987654321').toString();
-    const numAmt = parseFloat(amount);
-    if (isNaN(numAmt) || numAmt <= 0) {
-      return res.status(400).json({ success: false, message: 'Invalid claim amount' });
-    }
+    const numAmt = (amount !== undefined && amount !== null && !isNaN(parseFloat(amount)))
+      ? Math.max(0, parseFloat(amount))
+      : 0;
 
     await getOrCreateUser({ id: actualUserId });
     const updatedUser = await claimMinedReward(actualUserId, numAmt, Boolean(restart));
+    const fullUser = await getUserFullDetails(actualUserId);
 
     res.json({
       success: true,
-      walletBalance: Number(updatedUser.wallet_balance),
-      miningStartedAt: updatedUser.mining_started_at,
-      isMiningActive: updatedUser.is_mining_active,
-      user: updatedUser
+      walletBalance: Number(fullUser.wallet_balance),
+      claimedAmount: Number(updatedUser.claimed_amount || 0),
+      miningStartedAt: fullUser.mining_started_at,
+      isMiningActive: fullUser.is_mining_active,
+      user: fullUser
     });
   } catch (error) {
     console.error('API /api/claim error:', error);

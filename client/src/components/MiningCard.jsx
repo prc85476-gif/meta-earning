@@ -38,6 +38,7 @@ export const MiningCard = ({
 
   const isMiningActive = miningStatus === 'mining';
   const isClaimReady = minedBalance >= minClaimAmount;
+  const canShowClaimButton = isMiningActive || (miningStatus === 'completed' && isClaimReady);
 
   return (
     <section className="mining-card-v2" aria-label="Mining Status">
@@ -109,7 +110,7 @@ export const MiningCard = ({
           <span className="currency-usdt">USDT</span>
         </div>
 
-        {isMiningActive ? (
+        {canShowClaimButton ? (
           <button
             type="button"
             className={`btn-claim-compact ${isClaimReady ? 'btn-claim-ready' : 'btn-claim-locked'}`}

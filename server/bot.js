@@ -3,6 +3,8 @@ const {
   getOrCreateUser,
   getUserFullDetails,
   getBotGlobalStats,
+  startUserMining,
+  claimMinedReward,
   pool
 } = require('./db');
 
@@ -46,7 +48,11 @@ function notifyUserClaimReady(telegramId, amount = '0.0100') {
       inline_keyboard: [
         [
           {
-            text: '🚀 Claim Now',
+            text: '⚡ Claim in Bot',
+            callback_data: 'bot_claim'
+          },
+          {
+            text: '🚀 Open App',
             web_app: { url: webappUrl }
           }
         ]
@@ -71,7 +77,11 @@ function notifyUserMiningStopped(telegramId) {
       inline_keyboard: [
         [
           {
-            text: '⚡ Start Mining',
+            text: '⚡ Claim & Start Mining',
+            callback_data: 'bot_start_mining'
+          },
+          {
+            text: '🚀 Open App',
             web_app: { url: webappUrl }
           }
         ]
@@ -473,8 +483,181 @@ function initTelegramBot(webappUrl) {
         return sendUserHistory(chatId, userId);
       } else if (data === 'bot_stats') {
         return sendGlobalStats(chatId);
+      } else if (data === 'bot_claim') {
+        return handleBotClaim(chatId, userId);
+      } else if (data === 'bot_start_mining') {
+        return handleBotStartMining(chatId, userId);
       }
     });
+
+    // Helper: Direct Claim Handler for Bot
+    async function handleBotClaim(chatId, userId) {
+      try {
+        const user = await getUserFullDetails(userId);
+        if (!user) {
+          return bot.sendMessage(chatId, 'User not found. Please type /start.');
+        }
+
+        try {
+          const updatedUser = await claimMinedReward(userId, 0, false);
+          const claimedAmount = Number(updatedUser.claimed_amount || 0);
+          const newBalance = Number(updatedUser.wallet_balance || 0).toFixed(4);
+          const isStillMining = Boolean(updatedUser.is_mining_active);
+
+          const statusMsg = isStillMining
+            ? '🟢 *Mining is still active* and generating more rewards!'
+            : '⏳ *24h Mining Cycle Complete.* Click below to start a new cycle!';
+
+          const text =
+`🎉 *Mining Bonus Claimed Successfully!* 💰\n\n` +
+`✅ *+${claimedAmount.toFixed(4)} USDT* has been credited directly to your Main Balance!\n\n` +
+`💰 *New Main Balance (Withdrawable):* \`${newBalance} USDT\`\n` +
+`${statusMsg}\n\n` +
+`Share your referral link or deposit to upgrade your daily mining speed!`;
+
+          const buttons = [
+            [
+              { text: '🚀 Open Meta Farm', web_app: { url: globalWebappUrl || 'http://localhost:3000' } }
+            ]
+          ];
+
+          if (!isStillMining) {
+            buttons.push([
+              { text: '⚡ Start Next Mining Cycle', callback_data: 'bot_start_mining' },
+              { text: '💰 My Balance', callback_data: 'my_account' }
+            ]);
+          } else {
+            buttons.push([
+              { text: '⛏️ Mining Status', callback_data: 'my_mining' },
+              { text: '💰 My Balance', callback_data: 'my_account' }
+            ]);
+          }
+
+          return bot.sendMessage(chatId, text, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: buttons }
+          });
+        } catch (claimErr) {
+          const currentMined = Number(user.live_mined_unclaimed || user.mined_unclaimed || 0).toFixed(6);
+          const dailyRate = Number(user.daily_mining_rate || 0.05).toFixed(4);
+          const isMining = user.is_mining_active && user.mining_started_at;
+
+          let advice = '';
+          const buttons = [
+            [
+              { text: '🚀 Open Meta Farm', web_app: { url: globalWebappUrl || 'http://localhost:3000' } }
+            ]
+          ];
+
+          if (!isMining) {
+            advice = `Mining is currently stopped. Click *⚡ Start Mining* below to begin earning!`;
+            buttons.push([
+              { text: '⚡ Start Mining Now', callback_data: 'bot_start_mining' },
+              { text: '💰 My Balance', callback_data: 'my_account' }
+            ]);
+          } else {
+            advice = `Your cloud miner is running actively! Earnings accrue in real-time.\n• *Daily Rate:* \`${dailyRate} USDT/day\`\n• *Unclaimed Now:* \`${currentMined} USDT\``;
+            buttons.push([
+              { text: '⛏️ Mining Status', callback_data: 'my_mining' },
+              { text: '💰 My Balance', callback_data: 'my_account' }
+            ]);
+          }
+
+          const text =
+`ℹ️ *No Mining Rewards to Claim Yet*\n\n` +
+`${advice}\n\n` +
+`Your mining bonus will be available to claim as soon as it accrues!`;
+
+          return bot.sendMessage(chatId, text, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: buttons }
+          });
+        }
+      } catch (err) {
+        console.error('Error in handleBotClaim:', err);
+        return bot.sendMessage(chatId, 'An error occurred while processing your claim. Please try again.');
+      }
+    }
+
+    // Helper: Direct Start Mining Handler for Bot
+    async function handleBotStartMining(chatId, userId) {
+      try {
+        const user = await getUserFullDetails(userId);
+        if (!user) {
+          return bot.sendMessage(chatId, 'User not found. Please type /start.');
+        }
+
+        const now = Date.now();
+        const SESSION_MS = 24 * 60 * 60 * 1000;
+        const startTime = user.mining_started_at ? new Date(user.mining_started_at).getTime() : 0;
+        const isMining = user.is_mining_active && startTime && (now - startTime < SESSION_MS);
+
+        if (isMining) {
+          const remMs = SESSION_MS - (now - startTime);
+          const remHours = Math.floor(remMs / (3600 * 1000));
+          const remMins = Math.floor(((remMs % (3600 * 1000)) / (60 * 1000));
+          const unclaimed = Number(user.live_mined_unclaimed || user.mined_unclaimed || 0).toFixed(6);
+
+          const text =
+`⚡ *Mining is Already Active!* ⛏️\n\n` +
+`• *Time Remaining:* \`${remHours}h ${remMins}m\`\n` +
+`• *Unclaimed Bonus:* \`${unclaimed} USDT\`\n` +
+`• *Daily Mining Rate:* \`${Number(user.daily_mining_rate || 0.05).toFixed(4)} USDT/day\`\n\n` +
+`You can claim your mined bonus to your main balance anytime!`;
+
+          return bot.sendMessage(chatId, text, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '⚡ Claim Bonus Now', callback_data: 'bot_claim' },
+                  { text: '🚀 Open App', web_app: { url: globalWebappUrl || 'http://localhost:3000' } }
+                ],
+                [
+                  { text: '💰 My Balance', callback_data: 'my_account' }
+                ]
+              ]
+            }
+          });
+        }
+
+        // Start mining cycle & credit any uncollected from previous session
+        const { user: updatedUser, activatedReferrerId, referredUser } = await startUserMining(userId);
+
+        if (activatedReferrerId) {
+          const friendName = (referredUser?.first_name || referredUser?.username || 'Friend').trim();
+          notifyReferrerInviteSuccess(activatedReferrerId, friendName);
+        }
+
+        const fullUser = await getUserFullDetails(userId);
+        const text =
+`🚀 *24-Hour Mining Cycle Started!* ⛏️\n\n` +
+`Your USDT cloud miner is now actively generating earnings on Binance Smart Chain!\n\n` +
+`• *Cycle Duration:* 24 Hours\n` +
+`• *Daily Rate:* \`${Number(fullUser.daily_mining_rate || 0.05).toFixed(4)} USDT/day\`\n` +
+`• *Hashrate:* \`${Number(fullUser.hashrate || 1.22).toFixed(2)} GH/s\`\n` +
+`• *Main Balance:* \`${Number(fullUser.wallet_balance || 0).toFixed(4)} USDT\`\n\n` +
+`Claim your bonus anytime in this bot or in the Mini App!`;
+
+        return bot.sendMessage(chatId, text, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🚀 Open Meta Farm', web_app: { url: globalWebappUrl || 'http://localhost:3000' } }
+              ],
+              [
+                { text: '⚡ Claim Mining Reward', callback_data: 'bot_claim' },
+                { text: '💰 My Balance', callback_data: 'my_account' }
+              ]
+            ]
+          }
+        });
+      } catch (err) {
+        console.error('Error in handleBotStartMining:', err);
+        return bot.sendMessage(chatId, 'Failed to start mining. Please try again or open the app.');
+      }
+    }
 
     // Helper: Show User Account Details
     async function sendUserAccountInfo(chatId, userId) {
@@ -529,22 +712,33 @@ function initTelegramBot(webappUrl) {
 `• *Your Invite Link:*\n\`${refLink}\``;
 
         const webappUrl = globalWebappUrl || 'http://localhost:3000';
+        const accountButtons = [
+          [
+            { text: '🚀 Open Meta Farm', web_app: { url: webappUrl } }
+          ]
+        ];
+
+        if (Number(unclaimedBonus) >= 0.0001) {
+          accountButtons.push([
+            { text: `⚡ Claim Mined Bonus (${unclaimedBonus} USDT)`, callback_data: 'bot_claim' }
+          ]);
+        }
+
+        accountButtons.push(
+          [
+            { text: '⛏️ Mining Status', callback_data: 'my_mining' },
+            { text: '👥 My Referrals', callback_data: 'my_referrals' }
+          ],
+          [
+            { text: '📜 History', callback_data: 'my_history' },
+            { text: '🌐 Bot Stats', callback_data: 'bot_stats' }
+          ]
+        );
+
         await bot.sendMessage(chatId, text, {
           parse_mode: 'Markdown',
           reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '🚀 Open Meta Farm', web_app: { url: webappUrl } }
-              ],
-              [
-                { text: '⛏️ Mining Status', callback_data: 'my_mining' },
-                { text: '👥 My Referrals', callback_data: 'my_referrals' }
-              ],
-              [
-                { text: '📜 History', callback_data: 'my_history' },
-                { text: '🌐 Bot Stats', callback_data: 'bot_stats' }
-              ]
-            ]
+            inline_keyboard: accountButtons
           }
         });
       } catch (err) {
@@ -647,18 +841,35 @@ function initTelegramBot(webappUrl) {
 `💡 _Open Meta Farm below to claim your mined bonus to your main balance or start a fresh mining cycle!_`;
 
         const webappUrl = globalWebappUrl || 'http://localhost:3000';
+        const unclaimedNum = Number(user.live_mined_unclaimed || user.mined_unclaimed || 0);
+
+        const actionButtons = [];
+        if (unclaimedNum >= 0.0001) {
+          actionButtons.push({ text: `⚡ Claim (${unclaimedNum.toFixed(4)} USDT)`, callback_data: 'bot_claim' });
+        }
+        if (!isMining || miningStatusText.includes('Completed')) {
+          actionButtons.push({ text: '⚡ Start 24h Mining', callback_data: 'bot_start_mining' });
+        }
+
+        const keyboard = [
+          [
+            { text: '🚀 Open Meta Farm App', web_app: { url: webappUrl } }
+          ]
+        ];
+
+        if (actionButtons.length > 0) {
+          keyboard.push(actionButtons);
+        }
+
+        keyboard.push([
+          { text: '💰 My Balance', callback_data: 'my_account' },
+          { text: '👥 My Referrals', callback_data: 'my_referrals' }
+        ]);
+
         await bot.sendMessage(chatId, text, {
           parse_mode: 'Markdown',
           reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '🚀 Claim & Mine in App', web_app: { url: webappUrl } }
-              ],
-              [
-                { text: '💰 My Balance', callback_data: 'my_account' },
-                { text: '👥 My Referrals', callback_data: 'my_referrals' }
-              ]
-            ]
+            inline_keyboard: keyboard
           }
         });
       } catch (err) {
@@ -756,7 +967,15 @@ function initTelegramBot(webappUrl) {
         return sendUserReferralInfo(chatId, userId);
       }
 
-      if (text === '/mining' || text === '/mine' || text === '/bonus' || text === '/claim') {
+      if (text === '/claim') {
+        return handleBotClaim(chatId, userId);
+      }
+
+      if (text === '/start_mining' || text === '/startmining') {
+        return handleBotStartMining(chatId, userId);
+      }
+
+      if (text === '/mining' || text === '/mine' || text === '/bonus') {
         return sendUserMiningInfo(chatId, userId);
       }
 

@@ -226,18 +226,20 @@ async function getUserFullDetails(telegramId) {
   const SESSION_MS = 24 * 60 * 60 * 1000;
   let liveUnclaimed = Number(user.mined_unclaimed || 0);
 
-  if (user.is_mining_active && user.mining_started_at) {
+  if (user.mining_started_at) {
     const startTime = new Date(user.mining_started_at).getTime();
-    const elapsed = now - startTime;
+    const elapsed = Math.max(0, now - startTime);
     const dailyRate = Number(user.daily_mining_rate || 0.05);
     const claimedSoFar = Number(user.claimed_in_session || 0);
 
     if (elapsed < SESSION_MS) {
-      const progress = Math.min(1, Math.max(0, elapsed / SESSION_MS));
-      const totalSoFar = dailyRate * progress;
-      liveUnclaimed += Math.max(0, totalSoFar - claimedSoFar);
+      if (user.is_mining_active) {
+        const progress = Math.min(1, Math.max(0, elapsed / SESSION_MS));
+        const totalSoFar = dailyRate * progress;
+        liveUnclaimed += Math.max(0, totalSoFar - claimedSoFar);
+      }
     } else {
-      // 24h cycle finished while offline
+      // 24h cycle finished (whether is_mining_active is true or false, uncollected earnings are preserved)
       const remainingFromSession = Math.max(0, dailyRate - claimedSoFar);
       liveUnclaimed += remainingFromSession;
     }
@@ -627,7 +629,7 @@ async function claimMinedReward(telegramId, amount, restart = false) {
     const claimedSoFar = Number(user.claimed_in_session || 0);
 
     let accruedInSession = 0;
-    if (user.is_mining_active && startTime) {
+    if (startTime) {
       const progress = Math.min(1, elapsed / SESSION_MS);
       accruedInSession = Math.max(0, (dailyRate * progress) - claimedSoFar);
     }
@@ -707,7 +709,9 @@ async function claimMinedReward(telegramId, amount, restart = false) {
     );
 
     await client.query('COMMIT');
-    return res.rows[0];
+    const updatedUser = res.rows[0];
+    updatedUser.claimed_amount = verifiedAmount;
+    return updatedUser;
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
