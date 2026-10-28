@@ -277,7 +277,7 @@ async function verifyBscDeposit({ txHash, userId }) {
     return {
       success: false,
       code: 'BELOW_MINIMUM',
-      message: `Deposit amount (${creditedAmount.toFixed(4)} USDT) is below the minimum required 3.00 USDT threshold!`
+      message: `Deposit amount ($${creditedAmount.toFixed(2)} USDT) is too low! Minimum required deposit is 3.00 USDT. Please deposit at least 3.00 USDT and try again.`
     };
   }
 

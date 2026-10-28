@@ -21,7 +21,7 @@ export function App() {
     return saved === 'bn' ? 'en' : (saved || 'en');
   });
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
-  const [depositPreloadedAmount, setDepositPreloadedAmount] = useState(2);
+  const [depositPreloadedAmount, setDepositPreloadedAmount] = useState(3);
   const [currentTab, setCurrentTab] = useState('mining');
   const [user, setUser] = useState(() => {
     const tg = getTelegramUser();
@@ -991,7 +991,7 @@ export function App() {
             <QuickActions
               lang={lang}
               onOpenDeposit={() => {
-                setDepositPreloadedAmount(2);
+                setDepositPreloadedAmount(3);
                 setIsDepositOpen(true);
               }}
               onOpenWithdraw={() => setIsWithdrawOpen(true)}
@@ -1063,7 +1063,7 @@ export function App() {
             totalWithdraw={totalWithdraw}
             activities={activities}
             onOpenDeposit={() => {
-              setDepositPreloadedAmount(2);
+              setDepositPreloadedAmount(3);
               setIsDepositOpen(true);
             }}
             onOpenWithdraw={() => setIsWithdrawOpen(true)}

@@ -28,7 +28,8 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
   const [step, setStep] = useState('address');
   const [isVerifyingNext, setIsVerifyingNext] = useState(false);
   const [txId, setTxId] = useState('');
-  const [amount, setAmount] = useState('3');
+  const [amount, setAmount] = useState(() => (prefilledAmount && prefilledAmount >= 3 ? prefilledAmount.toString() : '3'));
+  const [creditedAmount, setCreditedAmount] = useState(() => (prefilledAmount && prefilledAmount >= 3 ? prefilledAmount : 3));
   const [txError, setTxError] = useState('');
   const [isSubmittingTx, setIsSubmittingTx] = useState(false);
 
@@ -41,7 +42,9 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
       setStep('address');
       setIsVerifyingNext(false);
       setTxId('');
-      setAmount('3');
+      const initAmt = (prefilledAmount && prefilledAmount >= 3) ? prefilledAmount : 3;
+      setAmount(initAmt.toString());
+      setCreditedAmount(initAmt);
       setTxError('');
       setIsSubmittingTx(false);
       if (!dialog.open) {
@@ -52,7 +55,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
         dialog.close();
       }
     }
-  }, [isOpen]);
+  }, [isOpen, prefilledAmount]);
 
   const handleBackdropClick = (e) => {
     const dialog = dialogRef.current;
@@ -146,6 +149,13 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
       return;
     }
 
+    const enteredAmt = parseFloat(amount);
+    if (!isNaN(enteredAmt) && enteredAmt < 3.00) {
+      triggerHaptic('warning');
+      setTxError('Deposit amount is too low! Minimum required deposit is $3.00 USDT. Please deposit at least $3.00 USDT and try again.');
+      return;
+    }
+
     setTxError('');
     setIsSubmittingTx(true);
     triggerHaptic('medium');
@@ -181,7 +191,8 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
       }
 
       // Successful verified deposit from BSC on-chain ledger
-      const verifiedAmount = data.amount || parseFloat(amount) || 3;
+      const verifiedAmount = data.amount !== undefined ? Number(data.amount) : (parseFloat(amount) || 3);
+      setCreditedAmount(verifiedAmount);
       setAmount(verifiedAmount.toString());
       setIsSubmittingTx(false);
       setStep('credited');
@@ -318,7 +329,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
                   Important Notice:
                 </span>
                 <p className="alert-desc">
-                  Minimum deposit is $3 USDT (BEP20). Deposits below $3 cannot be credited or refunded.
+                  Minimum deposit is $3.00 USDT (BEP20). Deposits below $3.00 cannot be credited. Any amount of $3.00 or higher ($3, $5, $10, $50+) will be fully verified and credited.
                 </p>
               </div>
             </div>
@@ -414,12 +425,18 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
                   min="3"
                   step="any"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => {
+                    setAmount(e.target.value);
+                    if (txError) setTxError('');
+                  }}
                   placeholder="3.00"
                   className="receipt-amt-input"
                 />
                 <span className="receipt-currency-badge">USDT</span>
               </div>
+              <span style={{ fontSize: '11px', color: '#64748b', marginTop: '5px', display: 'block', lineHeight: '1.4' }}>
+                ⚡ Any deposit of $3.00 or more ($3, $5, $10, $50+) will be automatically verified on-chain from your TxID and fully credited.
+              </span>
             </div>
 
             {/* Submit Receipt Button */}
@@ -455,7 +472,7 @@ export const DepositModal = ({ isOpen, onClose, onSimulateDeposit, lang, prefill
               Deposit Successfully Credited!
             </h3>
             <div className="success-amount-display">
-              +{parseFloat(amount || 3).toFixed(2)} USDT
+              +{creditedAmount.toFixed(2)} USDT
             </div>
 
             <div className="success-details-card">
